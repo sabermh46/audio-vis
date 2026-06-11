@@ -1,0 +1,273 @@
+/* ---------- Reset & theme ---------- */
+:root {
+  --bg: #0b0d12;
+  --surface: #12151d;
+  --surface-2: #1a1e29;
+  --border: #262b3a;
+  --text: #e8ebf4;
+  --text-dim: #8a91a5;
+  --accent: #6c5ce7;
+  --accent-2: #00cec9;
+  --danger: #e74c5c;
+  --radius: 12px;
+  --transport-h: 72px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  overflow: hidden;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+/* ---------- App shell ---------- */
+#app { height: 100%; }
+
+.av-app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- Stage (canvas area) ---------- */
+.av-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden; /* clips the slid-down gallery panel */
+  background: radial-gradient(ellipse at 50% 120%, #141828 0%, var(--bg) 70%);
+}
+
+.av-stage > canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* Idle hint shown on the stage before a track is loaded */
+.av-idle {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  color: var(--text-dim);
+  pointer-events: none;
+  transition: opacity 0.4s ease;
+}
+.av-idle.hidden { opacity: 0; }
+.av-idle .icon { font-size: 44px; opacity: 0.7; }
+.av-idle .hint { font-size: 15px; letter-spacing: 0.3px; }
+
+/* ---------- Drop zone ---------- */
+.av-dropzone {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+}
+
+.av-dropzone-overlay {
+  position: absolute;
+  inset: 12px;
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius);
+  background: rgba(108, 92, 231, 0.08);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  color: var(--text);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+}
+.av-dropzone.dragover .av-dropzone-overlay { opacity: 1; }
+
+/* ---------- Transport bar ---------- */
+.av-transport {
+  height: var(--transport-h);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 18px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+.av-btn {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  transition: background 0.15s ease, transform 0.1s ease, border-color 0.15s ease;
+}
+.av-btn:hover { background: #232838; border-color: #343b50; }
+.av-btn:active { transform: scale(0.94); }
+.av-btn:disabled { opacity: 0.4; cursor: default; }
+
+.av-btn-play {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.av-btn-play:hover { background: #7d6ef0; border-color: #7d6ef0; }
+
+.av-btn-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  font-size: 15px;
+  background: transparent;
+  border: 1px solid transparent;
+}
+.av-btn-icon:hover { background: var(--surface-2); border-color: var(--border); }
+.av-btn-icon.active { color: var(--accent-2); background: var(--surface-2); }
+
+.av-time {
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  color: var(--text-dim);
+  min-width: 96px;
+  text-align: center;
+  user-select: none;
+}
+
+.av-track-name {
+  font-size: 13px;
+  color: var(--text-dim);
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: none;
+}
+
+/* ---------- Sliders ---------- */
+.av-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 5px;
+  border-radius: 3px;
+  background: linear-gradient(to right, var(--accent) var(--fill, 0%), var(--surface-2) var(--fill, 0%));
+  outline: none;
+  cursor: pointer;
+}
+.av-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text);
+  border: none;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  transition: transform 0.1s ease;
+}
+.av-slider::-webkit-slider-thumb:hover { transform: scale(1.2); }
+.av-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text);
+  border: none;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+
+.av-seek { flex: 1; }
+
+.av-volume-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.av-volume { width: 90px; }
+.av-volume-icon { font-size: 14px; color: var(--text-dim); user-select: none; }
+
+/* ---------- Template gallery ---------- */
+.av-gallery {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  background: rgba(18, 21, 29, 0.92);
+  backdrop-filter: blur(12px);
+  border-top: 1px solid var(--border);
+  padding: 18px;
+  transform: translateY(100%);
+  pointer-events: none;
+  transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.av-gallery.open { transform: translateY(0); pointer-events: auto; }
+
+.av-gallery-title {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 1.4px;
+  color: var(--text-dim);
+  margin-bottom: 14px;
+}
+
+.av-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 14px;
+}
+
+.av-card {
+  text-align: left;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+}
+.av-card:hover {
+  transform: translateY(-2px);
+  border-color: #3a4158;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+.av-card.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 6px 18px rgba(108, 92, 231, 0.25);
+}
+
+.av-card canvas {
+  width: 100%;
+  height: 84px;
+  display: block;
+  background: var(--bg);
+}
+
+.av-card-body { padding: 10px 12px 12px; }
+.av-card-name { font-size: 14px; font-weight: 600; }
+.av-card-desc {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 3px;
+  line-height: 1.4;
+}
+
+/* ---------- Fullscreen ---------- */
+.av-stage:fullscreen { background: var(--bg); }
+.av-stage:fullscreen .av-gallery { display: none; }

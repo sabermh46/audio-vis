@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node .dev/make-test-wav.mjs)",
+      "Bash(node .dev/playback.mjs)"
+    ]
+  }
+}
