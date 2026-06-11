@@ -20,7 +20,17 @@ export class Visualizer {
   /**
    * Called every animation frame.
    * @param {CanvasRenderingContext2D} ctx - draw in CSS pixels (DPR pre-applied)
-   * @param {object} frame - FeatureExtractor frame: { bars, bands, bandsRaw, waveform, beat, volume }
+   * @param {object} frame - AnalysisSource frame:
+   *   bars: Float32Array       0..1 log-spaced spectrum, per-bar normalized
+   *   bands: {bass,mid,treble} 0..1 normalized + smoothed
+   *   bandsRaw: {...}          normalized, unsmoothed
+   *   waveform: Uint8Array     live time-domain samples (128 = silence)
+   *   beat: boolean            true on the frame a beat fires
+   *   volume: number           0..1 overall loudness (not normalized)
+   *   onset: number            0..1 percussive-onset strength
+   *   harmonic: number         0..1 melodic/vocal energy (≈ bands.mid in realtime mode)
+   *   percussive: number       0..1 drum energy (= onset in realtime mode)
+   *   tempo: number            BPM from offline analysis; 0 in realtime mode
    * @param {number} dt - seconds since last frame
    * @param {{width: number, height: number}} size - CSS pixel dimensions
    */

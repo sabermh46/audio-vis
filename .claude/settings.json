@@ -2,7 +2,14 @@
   "permissions": {
     "allow": [
       "Bash(node .dev/make-test-wav.mjs)",
-      "Bash(node .dev/playback.mjs)"
+      "Bash(node .dev/playback.mjs)",
+      "Bash(node .dev/debug-precomputed.mjs)",
+      "Bash(node .dev/precomputed.mjs)",
+      "Bash(node .dev/fallback.mjs)",
+      "Bash(netstat -ano)",
+      "Bash(awk '{print $5}')",
+      "Bash(node .dev/smoke.mjs)",
+      "Bash(node .dev/shapes-check.mjs)"
     ]
   }
 }

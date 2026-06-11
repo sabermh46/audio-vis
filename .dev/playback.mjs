@@ -97,8 +97,9 @@ const playIcon = await page.textContent('[data-action="play"]');
 check('button shows play icon when paused', playIcon.trim() === '▶', playIcon.trim());
 
 // Load a second file — proves the once-per-element MediaElementSource holds.
+// (The async load flow waits up to 1.2s for the analysis-server health check.)
 await page.setInputFiles('.av-dropzone input[type="file"]', WAV);
-await page.waitForTimeout(800);
+await page.waitForTimeout(2600);
 const reloaded = await page.evaluate(() => ({
   time: window.__app.audioEngine.currentTime,
   playing: window.__app.audioEngine.isPlaying,

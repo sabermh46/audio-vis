@@ -79,7 +79,9 @@ export class ShapesVisualizer extends Visualizer {
     this.#ripples = this.#ripples.filter((r) => r.alpha > 0);
 
     for (const shape of SHAPES) {
-      const energy = bands[shape.band];
+      // The vocal diamond prefers frame.harmonic (true melodic/vocal energy
+      // from the offline HPSS analysis; equals bands.mid in realtime mode).
+      const energy = shape.band === 'mid' ? frame.harmonic : bands[shape.band];
       const x = shape.x * width;
       const [r, g, b] = shape.color;
       const scale = 1 + energy * 1.6;

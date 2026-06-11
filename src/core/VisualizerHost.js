@@ -2,13 +2,15 @@ import { EventEmitter } from './EventEmitter.js';
 
 /**
  * The render layer: owns the only canvas and the only rAF loop.
- * Each tick it polls the FeatureExtractor and hands the frame to the
- * active visualizer. Handles DPR-aware resizing and fullscreen.
+ * Each tick it polls the active AnalysisSource (anything exposing
+ * `update(nowMs)` + `frame` — realtime FeatureExtractor or
+ * PrecomputedAnalysisSource) and hands the frame to the active
+ * visualizer. Handles DPR-aware resizing and fullscreen.
  *
  * Events: 'tick' (per frame — App uses it to refresh the time display)
  */
 export class VisualizerHost extends EventEmitter {
-  #extractor;
+  #source;
   #container = null;
   #canvas = null;
   #ctx = null;
@@ -20,9 +22,14 @@ export class VisualizerHost extends EventEmitter {
   #width = 0;
   #height = 0;
 
-  constructor(extractor) {
+  constructor(source) {
     super();
-    this.#extractor = extractor;
+    this.#source = source;
+  }
+
+  /** Swaps the analysis source; takes effect on the next tick. */
+  setSource(source) {
+    this.#source = source;
   }
 
   attach(container) {
@@ -65,9 +72,9 @@ export class VisualizerHost extends EventEmitter {
     const dt = Math.min((now - this.#lastTime) / 1000, 0.1);
     this.#lastTime = now;
 
-    this.#extractor.update(now);
+    this.#source.update(now);
     if (this.#visualizer) {
-      this.#visualizer.render(this.#ctx, this.#extractor.frame, dt, {
+      this.#visualizer.render(this.#ctx, this.#source.frame, dt, {
         width: this.#width,
         height: this.#height,
       });

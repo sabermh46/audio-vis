@@ -5,9 +5,12 @@ import { VisualizerRegistry } from './visualizers/VisualizerRegistry.js';
 import { BarsVisualizer } from './visualizers/BarsVisualizer.js';
 import { WaveformVisualizer } from './visualizers/WaveformVisualizer.js';
 import { ShapesVisualizer } from './visualizers/ShapesVisualizer.js';
+import { AnalysisClient } from './core/AnalysisClient.js';
+import { PrecomputedAnalysisSource } from './core/PrecomputedAnalysisSource.js';
 import { DropZone } from './ui/DropZone.js';
 import { TransportControls } from './ui/TransportControls.js';
 import { TemplateGallery } from './ui/TemplateGallery.js';
+import { StatusIndicator } from './ui/StatusIndicator.js';
 
 const STORAGE_KEY = 'audio-vis:visualizer';
 const DEFAULT_VISUALIZER = 'bars';
@@ -23,13 +26,19 @@ export class App {
   extractor = null;
   host = null;
   registry = null;
+  analysisClient = null;
+  precomputedSource = null;
+  mode = null; // 'precomputed' | 'realtime' | null
 
   #dropZone = null;
   #transport = null;
   #gallery = null;
+  #status = null;
   #root = null;
   #idleEl = null;
   #unsubscribers = [];
+  #analysisAbort = null;
+  #loadSeq = 0;
 
   init(container) {
     this.#root = document.createElement('div');
@@ -52,6 +61,7 @@ export class App {
     this.extractor = new FeatureExtractor(this.audioEngine.analyser, { numBars: 64 });
     this.host = new VisualizerHost(this.extractor);
     this.host.attach(stage);
+    this.analysisClient = new AnalysisClient();
 
     this.registry = new VisualizerRegistry();
     this.registry.register(BarsVisualizer);
@@ -65,6 +75,8 @@ export class App {
     this.#transport.attach(this.#root);
     this.#gallery = new TemplateGallery(this.registry);
     this.#gallery.attach(stage);
+    this.#status = new StatusIndicator();
+    this.#status.attach(stage);
 
     this.#wire();
     this.#selectVisualizer(this.#restoreVisualizerId());
@@ -113,7 +125,54 @@ export class App {
     }));
   }
 
-  #loadFile(file) {
+  /**
+   * Analysis-first load: try the Python server for whole-track-normalized
+   * data; on any failure fall back to the realtime extractor. Playback
+   * starts only after the analysis question is settled (loadFile is last —
+   * its trackloaded handler auto-plays).
+   */
+  async #loadFile(file) {
+    const seq = ++this.#loadSeq;
+    this.#analysisAbort?.abort();
+    this.#analysisAbort = new AbortController();
+    this.#status.setMode(null);
+    this.#status.setBusy('Checking analysis server…');
+
+    let usePrecomputed = false;
+    if (await this.analysisClient.isAvailable()) {
+      try {
+        const phaseText = {
+          decoding: 'Decoding audio…',
+          uploading: 'Uploading…',
+          analyzing: 'Analyzing audio…',
+        };
+        const analysis = await this.analysisClient.analyze(file, {
+          onPhase: (phase) => this.#status.setBusy(phaseText[phase]),
+          signal: this.#analysisAbort.signal,
+        });
+        if (seq !== this.#loadSeq) return; // superseded by a newer file drop
+        this.lastAnalysis = analysis; // exposed for tests/debugging
+        this.precomputedSource = new PrecomputedAnalysisSource(analysis, {
+          getTime: () => this.audioEngine.currentTime,
+          analyser: this.audioEngine.analyser,
+        });
+        this.host.setSource(this.precomputedSource);
+        usePrecomputed = true;
+      } catch (e) {
+        if (seq !== this.#loadSeq) return;
+        // Don't let silent fallback mask real bugs (CORS, server errors).
+        console.warn('[audio-vis] analysis failed, falling back to realtime:', e);
+      }
+    }
+    if (seq !== this.#loadSeq) return;
+
+    if (!usePrecomputed) {
+      this.precomputedSource = null;
+      this.host.setSource(this.extractor);
+    }
+    this.mode = usePrecomputed ? 'precomputed' : 'realtime';
+    this.#status.setMode(this.mode);
+    this.#status.setBusy(null);
     this.audioEngine.loadFile(file);
   }
 
@@ -130,9 +189,11 @@ export class App {
   }
 
   destroy() {
+    this.#analysisAbort?.abort();
     for (const unsubscribe of this.#unsubscribers) unsubscribe();
     this.#unsubscribers = [];
     this.host.destroy();
+    this.#status.destroy();
     this.#gallery.destroy();
     this.#transport.destroy();
     this.#dropZone.destroy();
