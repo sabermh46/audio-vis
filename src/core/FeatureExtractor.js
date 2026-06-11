@@ -127,8 +127,17 @@ export class FeatureExtractor {
     for (const name of Object.keys(BANDS)) {
       const [lo, hi] = this.#bandRanges[name];
       let sum = 0;
-      for (let i = lo; i <= hi; i++) sum += this.#freqData[i];
-      const raw = sum / ((hi - lo + 1) * 255);
+      let peak = 0;
+      for (let i = lo; i <= hi; i++) {
+        const v = this.#freqData[i];
+        sum += v;
+        if (v > peak) peak = v;
+      }
+      // Blend mean with peak: bands differ hugely in bin count (bass ~24,
+      // treble ~1500), so pure mean makes narrow content (a synth lead,
+      // a tone) invisible in wide bands while mean alone reads broadband
+      // energy. The blend keeps every band responsive to both.
+      const raw = (sum / (hi - lo + 1) + peak) / (2 * 255);
       bandsRaw[name] = raw;
       const rate = raw > bands[name] ? BAND_ATTACK : BAND_RELEASE;
       bands[name] += (raw - bands[name]) * rate;

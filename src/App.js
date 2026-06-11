@@ -4,6 +4,7 @@ import { VisualizerHost } from './core/VisualizerHost.js';
 import { VisualizerRegistry } from './visualizers/VisualizerRegistry.js';
 import { BarsVisualizer } from './visualizers/BarsVisualizer.js';
 import { WaveformVisualizer } from './visualizers/WaveformVisualizer.js';
+import { ShapesVisualizer } from './visualizers/ShapesVisualizer.js';
 import { DropZone } from './ui/DropZone.js';
 import { TransportControls } from './ui/TransportControls.js';
 import { TemplateGallery } from './ui/TemplateGallery.js';
@@ -55,6 +56,7 @@ export class App {
     this.registry = new VisualizerRegistry();
     this.registry.register(BarsVisualizer);
     this.registry.register(WaveformVisualizer);
+    this.registry.register(ShapesVisualizer);
 
     // --- UI ---
     this.#dropZone = new DropZone();
