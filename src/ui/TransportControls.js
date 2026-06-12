@@ -34,6 +34,7 @@ export class TransportControls extends EventEmitter {
         <span class="av-volume-icon">🔊</span>
         <input class="av-slider av-volume" data-el="volume" type="range" min="0" max="100" value="80" />
       </div>
+      <button class="av-btn-icon" data-action="editor" title="Scene editor">✏️</button>
       <button class="av-btn-icon" data-action="gallery" title="Visualizer templates">🎨</button>
       <button class="av-btn-icon" data-action="fullscreen" title="Fullscreen">⛶</button>
     `;
@@ -55,6 +56,7 @@ export class TransportControls extends EventEmitter {
     listen(this.#el.querySelector('[data-action="openFile"]'), 'click', () => this.emit('openFile'));
     listen(this.#playBtn, 'click', () => this.emit('playToggle'));
     listen(this.#galleryBtn, 'click', () => this.emit('toggleGallery'));
+    listen(this.#el.querySelector('[data-action="editor"]'), 'click', () => this.emit('toggleEditor'));
     listen(this.#el.querySelector('[data-action="fullscreen"]'), 'click', () => this.emit('toggleFullscreen'));
 
     // While dragging, programmatic setTime() is suppressed so the thumb
@@ -111,6 +113,10 @@ export class TransportControls extends EventEmitter {
 
   setGalleryOpen(isOpen) {
     this.#galleryBtn.classList.toggle('active', isOpen);
+  }
+
+  setEditorOpen(isOpen) {
+    this.#el.querySelector('[data-action="editor"]').classList.toggle('active', isOpen);
   }
 
   destroy() {

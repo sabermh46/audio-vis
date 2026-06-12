@@ -33,7 +33,25 @@ The app auto-detects the server. If it's not running, everything still works in 
 
 ## Track library
 
-Processed tracks are saved under `server/library/<trackId>/` (`audio.<ext>` original file, `analysis.json.gz`, `meta.json`, `scenes.json`). On launch a modal offers **Process new audio** or **Open from library** (instant — no re-analysis). `trackId = sha256(original)[:16]` dedups, so a song is only ever processed once. The 🗂 button reopens the library mid-session. Endpoints: `GET /library`, `GET /library/{id}/audio` (HTTP Range for seeking), `GET /library/{id}/analysis`, `DELETE`, `PATCH` (rename), `PUT /library/{id}/scenes` (reserved for the upcoming timeline editor). Audio is served cross-origin, so `AudioEngine` sets `crossOrigin='anonymous'` to keep the analyser tap clean.
+Processed tracks are saved under `server/library/<trackId>/` (`audio.<ext>` original file, `analysis.json.gz`, `meta.json`, `scenes.json`). On launch a modal offers **Process new audio** or **Open from library** (instant — no re-analysis). `trackId = sha256(original)[:16]` dedups, so a song is only ever processed once. The 🗂 button reopens the library mid-session. Endpoints: `GET /library`, `GET /library/{id}/audio` (HTTP Range for seeking), `GET /library/{id}/analysis`, `DELETE`, `PATCH` (rename), `GET`/`PUT /library/{id}/scenes`. Audio is served cross-origin, so `AudioEngine` sets `crossOrigin='anonymous'` to keep the analyser tap clean.
+
+## Scene editor (per-song hybrids)
+
+The ✏️ button opens a per-song editor: pick a **base visualizer**, drop reactive **elements** on top (Bouncing Star, Mirrored Bars, Pulse Ring, Orbit Dots), and bind each to a signal (`stem.*`, `band.*`, `onset`, `beat`, `volume`, …). Each element reacts at a low default intensity (~30%); on the **timeline strip** you drag to paint time-ranges where it surges toward 100% (with ramp in/out) — e.g. to spotlight a section the ML stems can't isolate. Drag an element on the stage to position it. Saves persist per track and reapply automatically when the song is reopened.
+
+The render side is a `SceneCompositor` (a `Visualizer` subclass) that draws the base, then for each element resolves `signal × sensitivity × intensity` (intensity from `EnvelopeEvaluator` at the audio `currentTime`) and calls the element's `render`. Adding an element = one file in `src/components/` + one `register()` call.
+
+### Scene storage (MySQL, with file fallback)
+
+Scenes are stored in **MySQL** (e.g. XAMPP/phpMyAdmin). Create the database once in phpMyAdmin (default name `audio_vis`); the `scenes` table auto-creates. Configure via env vars before launching uvicorn (XAMPP defaults shown):
+
+```
+AUDIO_VIS_DB_HOST=127.0.0.1  AUDIO_VIS_DB_PORT=3306
+AUDIO_VIS_DB_USER=root       AUDIO_VIS_DB_PASSWORD=
+AUDIO_VIS_DB_NAME=audio_vis
+```
+
+If MySQL is unreachable (no driver, DB down, wrong creds), the server transparently falls back to the per-track `scenes.json` file store — the app and tests keep working. `GET /health` reports which is active via `scenesBackend: "mysql" | "file"`.
 
 ## Two analysis modes
 
@@ -129,6 +147,9 @@ node .dev/make-test-wav.mjs   # generate the test signal (60Hz / 8kHz / 120BPM c
 node .dev/smoke.mjs           # UI shell, gallery, persistence
 node .dev/playback.mjs        # playback, band separation, seek, teardown (realtime mode)
 node .dev/shapes-check.mjs    # per-shape band isolation
+node .dev/envelope-direct.mjs # intensity-envelope unit test (pure, no server/browser)
+node .dev/scenes-endpoint.mjs # scene GET/PUT round-trip (server must be up; prints backend)
+node .dev/editor-flow.mjs     # spawns uvicorn; add element -> paint region -> save -> reapply
 node .dev/precomputed.mjs     # spawns uvicorn; full server-analysis path incl. ML stems
 node .dev/fallback.mjs        # server down -> realtime fallback + badge
 node .dev/analyze-endpoint.mjs           # endpoint schema, ML, cache (server must be up)

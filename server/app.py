@@ -23,6 +23,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
 import library
+import scenes_store
 import stems as stems_module
 from analysis import SR, analyze
 
@@ -58,7 +59,12 @@ def warm_up() -> None:
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "version": 1, "ml": stems_module.availability()}
+    return {
+        "status": "ok",
+        "version": 1,
+        "ml": stems_module.availability(),
+        "scenesBackend": scenes_store.backend(),
+    }
 
 
 def _cache_path(raw: bytes, ml: bool) -> Path:
@@ -191,11 +197,16 @@ def library_rename(tid: str, name: str = Body(..., embed=True)) -> dict:
     return meta
 
 
+@app.get("/library/{tid}/scenes")
+def library_get_scenes(tid: str) -> dict:
+    _require_track(tid)
+    return scenes_store.get_scenes(tid) or {"schemaVersion": 2, "scenes": []}
+
+
 @app.put("/library/{tid}/scenes")
 def library_put_scenes(tid: str, envelope: dict = Body(...)) -> dict:
     _require_track(tid)
-    try:
-        out = library.write_scenes(tid, envelope)
-    except ValueError as e:
-        raise HTTPException(422, detail=str(e))
-    return out
+    if not isinstance(envelope, dict) or not isinstance(envelope.get("scenes"), list):
+        raise HTTPException(422, detail="scenes envelope must be {schemaVersion, scenes: [...]}")
+    out = {"schemaVersion": int(envelope.get("schemaVersion", 2)), "scenes": envelope["scenes"]}
+    return scenes_store.set_scenes(tid, out)

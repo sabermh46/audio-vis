@@ -5,3 +5,4 @@ librosa>=0.10.2
 soundfile>=0.12.1
 numpy>=1.26
 audio-separator[cpu]>=0.44
+pymysql>=1.1

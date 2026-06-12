@@ -2,9 +2,20 @@ import { AudioEngine } from './core/AudioEngine.js';
 import { FeatureExtractor } from './core/FeatureExtractor.js';
 import { VisualizerHost } from './core/VisualizerHost.js';
 import { VisualizerRegistry } from './visualizers/VisualizerRegistry.js';
+import { AuroraConfluenceVisualizer } from './visualizers/AuroraConfluenceVisualizer.js';
+import { QuadOrbitVisualizer } from './visualizers/QuadOrbitVisualizer.js';
+import { NebulaGardenVisualizer } from './visualizers/NebulaGardenVisualizer.js';
+import { CelestialOrreryVisualizer } from './visualizers/CelestialOrreryVisualizer.js';
 import { BarsVisualizer } from './visualizers/BarsVisualizer.js';
 import { WaveformVisualizer } from './visualizers/WaveformVisualizer.js';
 import { ShapesVisualizer } from './visualizers/ShapesVisualizer.js';
+import { HyperspaceVisualizer } from './visualizers/HyperspaceVisualizer.js';
+import { SceneCompositor } from './visualizers/SceneCompositor.js';
+import { ComponentRegistry } from './components/ComponentRegistry.js';
+import { BouncingStar } from './components/BouncingStar.js';
+import { MirroredBars } from './components/MirroredBars.js';
+import { PulseRing } from './components/PulseRing.js';
+import { OrbitDots } from './components/OrbitDots.js';
 import { AnalysisClient } from './core/AnalysisClient.js';
 import { PrecomputedAnalysisSource } from './core/PrecomputedAnalysisSource.js';
 import { DropZone } from './ui/DropZone.js';
@@ -12,6 +23,8 @@ import { TransportControls } from './ui/TransportControls.js';
 import { TemplateGallery } from './ui/TemplateGallery.js';
 import { StatusIndicator } from './ui/StatusIndicator.js';
 import { StartupModal } from './ui/StartupModal.js';
+import { SceneEditor } from './ui/SceneEditor.js';
+
 
 const STORAGE_KEY = 'audio-vis:visualizer';
 const DEFAULT_VISUALIZER = 'bars';
@@ -27,8 +40,10 @@ export class App {
   extractor = null;
   host = null;
   registry = null;
+  componentRegistry = null;
   analysisClient = null;
   precomputedSource = null;
+  compositor = null;
   mode = null; // 'precomputed' | 'realtime' | null
 
   #dropZone = null;
@@ -36,6 +51,8 @@ export class App {
   #gallery = null;
   #status = null;
   #modal = null;
+  #editor = null;
+  #editorOpen = false;
   #root = null;
   #idleEl = null;
   #unsubscribers = [];
@@ -67,9 +84,20 @@ export class App {
     this.analysisClient = new AnalysisClient();
 
     this.registry = new VisualizerRegistry();
+    this.registry.register(HyperspaceVisualizer);
+    this.registry.register(AuroraConfluenceVisualizer);
+    this.registry.register(QuadOrbitVisualizer);
+    this.registry.register(NebulaGardenVisualizer);
     this.registry.register(BarsVisualizer);
     this.registry.register(WaveformVisualizer);
     this.registry.register(ShapesVisualizer);
+    this.registry.register(CelestialOrreryVisualizer);
+
+    this.componentRegistry = new ComponentRegistry();
+    this.componentRegistry.register(BouncingStar);
+    this.componentRegistry.register(MirroredBars);
+    this.componentRegistry.register(PulseRing);
+    this.componentRegistry.register(OrbitDots);
 
     // --- UI ---
     this.#dropZone = new DropZone();
@@ -82,6 +110,11 @@ export class App {
     this.#status.attach(stage);
     this.#modal = new StartupModal();
     this.#modal.attach(this.#root);
+    this.#editor = new SceneEditor();
+    this.#editor.attach(stage);
+    this.#editor.setComponentList(this.componentRegistry.list());
+    this.#editor.setBaseOptions(this.registry.list().map((m) => ({ id: m.id, name: m.name })));
+    this.#editor.setEnabled(false);
 
     this.#wire();
     this.#selectVisualizer(this.#restoreVisualizerId());
@@ -127,6 +160,23 @@ export class App {
     sub(this.#dropZone.on('file', (file) => this.#loadFile(file)));
     sub(this.#transport.on('openFile', () => this.#dropZone.openPicker()));
     sub(this.#transport.on('openLibrary', () => { this.#refreshLibrary(); this.#modal.show(); }));
+    sub(this.#transport.on('toggleEditor', () => this.#toggleEditor()));
+
+    // Scene editor intents -> compositor + persistence
+    sub(this.#editor.on('addComponent', (type) => this.#addComponent(type)));
+    sub(this.#editor.on('removeComponent', (id) => {
+      this.compositor?.removeComponent(id);
+      this.#editor.setScene(this.compositor?.getScene() ?? this.#blankScene());
+    }));
+    sub(this.#editor.on('updateComponent', ({ id, patch }) => this.compositor?.updateComponent(id, patch)));
+    sub(this.#editor.on('setBase', (id) => {
+      this.compositor?.setBaseVisualizer(id ? this.registry.create(id) : null);
+      const scene = this.compositor?.getScene();
+      if (scene) { scene.base = id; this.compositor.setScene(scene); }
+    }));
+    sub(this.#editor.on('seek', (seconds) => this.audioEngine.seek(seconds)));
+    sub(this.#editor.on('save', () => this.#saveScene()));
+    sub(this.#editor.on('close', () => this.#toggleEditor(false)));
     sub(this.#transport.on('playToggle', () => this.audioEngine.toggle()));
     sub(this.#transport.on('seek', (seconds) => this.audioEngine.seek(seconds)));
     sub(this.#transport.on('volume', (value) => this.audioEngine.setVolume(value)));
@@ -144,7 +194,9 @@ export class App {
       this.#transport.setTrack(name, duration);
       this.#idleEl.classList.add('hidden');
       this.#dropZone.setClickThrough(true);
+      this.#editor.setEnabled(true);
       this.host.start();
+      this.#applySceneForTrack();
       this.audioEngine.play().catch(() => {/* user can press play manually */});
     }));
     sub(this.audioEngine.on('play', () => this.#transport.setPlaying(true)));
@@ -164,6 +216,7 @@ export class App {
     // (the media element's timeupdate event only fires ~4x per second).
     sub(this.host.on('tick', () => {
       this.#transport.setTime(this.audioEngine.currentTime, this.audioEngine.duration);
+      if (this.#editorOpen) this.#editor.setTime(this.audioEngine.currentTime);
     }));
   }
 
@@ -268,9 +321,123 @@ export class App {
 
   #selectVisualizer(id) {
     if (!this.registry.has(id)) id = DEFAULT_VISUALIZER;
+    // Picking from the gallery outside the editor drops any active hybrid,
+    // so the gallery behaves exactly as before this feature.
+    if (this.compositor && !this.#editorOpen) this.compositor = null;
     this.host.setVisualizer(this.registry.create(id));
     this.#gallery.setActive(id);
     try { localStorage.setItem(STORAGE_KEY, id); } catch { /* private mode */ }
+  }
+
+  /** Base visualizer id currently in effect (compositor's base, else stored). */
+  #currentBaseId() {
+    if (this.compositor) return this.compositor.getScene().base ?? DEFAULT_VISUALIZER;
+    return this.#restoreVisualizerId();
+  }
+
+  #blankScene(baseId) {
+    return {
+      id: `scene-${Math.floor(this.audioEngine.currentTime * 1000) % 1e6}-${this.#loadSeq}`,
+      name: 'Scene',
+      base: baseId ?? this.#currentBaseId(),
+      canvas: { bg: '#05060c', blendMode: 'source-over', fadeTrails: 0 },
+      components: [],
+    };
+  }
+
+  /** Build a compositor wrapping the current base (used when entering edit). */
+  #ensureCompositor() {
+    if (this.compositor) return;
+    const baseId = this.#currentBaseId();
+    this.compositor = new SceneCompositor({
+      baseVisualizer: this.registry.create(baseId),
+      scene: this.#blankScene(baseId),
+      getTime: () => this.audioEngine.currentTime,
+      componentRegistry: this.componentRegistry,
+    });
+    this.host.setVisualizer(this.compositor);
+  }
+
+  /** On track load: reapply a saved hybrid scene if one exists for this track. */
+  async #applySceneForTrack() {
+    const trackId = this.lastAnalysis?.trackId;
+    if (!trackId || this.mode !== 'precomputed') { this.#clearCompositor(); return; }
+    let envelope = null;
+    try { envelope = await this.analysisClient.getScenes(trackId); } catch { /* offline */ }
+    const scene = envelope?.scenes?.[0];
+    if (scene && scene.components?.length) {
+      const baseId = scene.base ?? this.#currentBaseId();
+      this.compositor = new SceneCompositor({
+        baseVisualizer: baseId ? this.registry.create(baseId) : null,
+        scene,
+        getTime: () => this.audioEngine.currentTime,
+        componentRegistry: this.componentRegistry,
+      });
+      this.host.setVisualizer(this.compositor);
+    } else {
+      this.#clearCompositor();
+    }
+    if (this.#editorOpen) this.#editor.setScene(this.compositor?.getScene() ?? this.#blankScene());
+  }
+
+  #clearCompositor() {
+    if (!this.compositor) return;
+    this.compositor = null;
+    this.host.setVisualizer(this.registry.create(this.#restoreVisualizerId()));
+  }
+
+  #toggleEditor(force) {
+    if (!this.audioEngine.hasTrack) return;
+    this.#editorOpen = this.#editor.toggle(force);
+    this.#transport.setEditorOpen(this.#editorOpen);
+    if (this.#editorOpen) {
+      this.#ensureCompositor();
+      const trackId = this.lastAnalysis?.trackId ?? null;
+      this.#editor.setEnabled(true);
+      this.#editor.setTrack({
+        trackId,
+        duration: this.audioEngine.duration,
+        beats: this.lastAnalysis?.beats ?? new Float64Array(0),
+        canSave: !!trackId && this.mode === 'precomputed',
+      });
+      this.#editor.setScene(this.compositor.getScene());
+    } else if (this.#canSaveScene()) {
+      this.#saveScene(); // autosave on close
+    }
+  }
+
+  #canSaveScene() {
+    return !!this.lastAnalysis?.trackId && this.mode === 'precomputed' && !!this.compositor;
+  }
+
+  #addComponent(type) {
+    if (!this.compositor) this.#ensureCompositor();
+    const meta = this.componentRegistry.getClass(type)?.meta;
+    if (!meta) return;
+    const component = {
+      id: `cmp-${this.#loadSeq}-${this.compositor.getScene().components.length}-${type}`,
+      type,
+      enabled: true,
+      z: this.compositor.getScene().components.length,
+      bind: { signal: meta.defaultSignal },
+      params: { ...meta.defaults },
+      automation: [],
+    };
+    this.compositor.addComponent(component);
+    this.#editor.setScene(this.compositor.getScene());
+  }
+
+  async #saveScene() {
+    const trackId = this.lastAnalysis?.trackId;
+    if (!trackId || this.mode !== 'precomputed' || !this.compositor) return;
+    const scene = this.compositor.getScene();
+    scene.base = this.#currentBaseId();
+    try {
+      await this.analysisClient.saveScene(trackId, { schemaVersion: 2, scenes: [scene] });
+      this.#editor?.flashSaved();
+    } catch (e) {
+      console.warn('[audio-vis] scene save failed', e);
+    }
   }
 
   #restoreVisualizerId() {
@@ -288,6 +455,7 @@ export class App {
     this.#transport.destroy();
     this.#dropZone.destroy();
     this.#modal.destroy();
+    this.#editor.destroy();
     this.audioEngine.destroy();
     this.#root?.remove();
   }

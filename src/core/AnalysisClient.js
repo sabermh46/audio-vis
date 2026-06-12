@@ -115,6 +115,24 @@ export class AnalysisClient {
     if (!res.ok) throw new AnalysisError(`Delete failed: HTTP ${res.status}`, 'library');
   }
 
+  /** Per-song scene envelope ({schemaVersion, scenes:[]}); null if none saved. */
+  async getScenes(trackId) {
+    const res = await fetch(`${this.#baseUrl}/library/${trackId}/scenes`);
+    if (res.status === 404) return null;
+    if (!res.ok) throw new AnalysisError(`Scenes fetch failed: HTTP ${res.status}`, 'scenes');
+    return res.json();
+  }
+
+  async saveScene(trackId, envelope) {
+    const res = await fetch(`${this.#baseUrl}/library/${trackId}/scenes`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(envelope),
+    });
+    if (!res.ok) throw new AnalysisError(`Scenes save failed: HTTP ${res.status}`, 'scenes');
+    return res.json();
+  }
+
   async renameLibraryEntry(id, name) {
     const res = await fetch(`${this.#baseUrl}/library/${id}`, {
       method: 'PATCH',

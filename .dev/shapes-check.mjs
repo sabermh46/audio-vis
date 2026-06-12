@@ -5,10 +5,13 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import os from 'node:os';
 
+import { resetTestScene } from './_reset-scene.mjs';
+
 const require = createRequire(path.join(os.tmpdir(), 'av-driver', 'package.json'));
 const { chromium } = require('playwright-core');
 
 const OUT = path.resolve('.dev');
+await resetTestScene(); // ensure no saved hybrid scene hijacks the visualizer
 const errors = [];
 const failures = [];
 const check = (name, ok, detail = '') => {
@@ -35,12 +38,13 @@ await page.waitForSelector('.av-transport');
 await page.setInputFiles('.av-modal input[type="file"]', path.join(OUT, 'test.wav'));
 await page.waitForSelector('[data-action="play"]:not([disabled])', { timeout: 600000 });
 
-// Gallery should list 3 cards now, with shapes active.
+// Gallery lists the registered templates, with shapes active.
 await page.click('[data-action="gallery"]');
 await page.waitForTimeout(400);
 const cards = await page.$$eval('.av-card', (els) =>
   els.map((e) => ({ id: e.dataset.id, active: e.classList.contains('active') })));
-check('gallery has 3 templates', cards.length === 3, JSON.stringify(cards.map((c) => c.id)));
+check('gallery lists templates incl. shapes', cards.length >= 3 && cards.some((c) => c.id === 'shapes'),
+  JSON.stringify(cards.map((c) => c.id)));
 check('shapes card active', cards.find((c) => c.id === 'shapes')?.active === true);
 await page.screenshot({ path: path.join(OUT, '7-gallery-3cards.png') });
 await page.click('[data-action="gallery"]');
