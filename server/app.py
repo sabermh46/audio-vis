@@ -19,8 +19,10 @@ app = FastAPI(title="audio-vis analysis server")
 
 app.add_middleware(
     CORSMiddleware,
-    # Both spellings: the page may be opened via either host.
-    allow_origins=["http://localhost:8123", "http://127.0.0.1:8123"],
+    # Local dev server: allow any localhost origin regardless of port or
+    # host spelling (localhost vs 127.0.0.1 are DIFFERENT origins to CORS,
+    # and dev servers vary: 8123, 5500 Live Server, 5173 Vite, ...).
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
