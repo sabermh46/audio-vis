@@ -53,6 +53,7 @@ export class App {
   #modal = null;
   #editor = null;
   #editorOpen = false;
+  #hasSavedScene = false;
   #root = null;
   #idleEl = null;
   #unsubscribers = [];
@@ -176,6 +177,8 @@ export class App {
     }));
     sub(this.#editor.on('seek', (seconds) => this.audioEngine.seek(seconds)));
     sub(this.#editor.on('save', () => this.#saveScene()));
+    sub(this.#editor.on('loadSaved', () => this.#loadSavedScene()));
+    sub(this.#editor.on('clearScene', () => this.#clearScene()));
     sub(this.#editor.on('close', () => this.#toggleEditor(false)));
     sub(this.#transport.on('playToggle', () => this.audioEngine.toggle()));
     sub(this.#transport.on('seek', (seconds) => this.audioEngine.seek(seconds)));
@@ -365,7 +368,8 @@ export class App {
     let envelope = null;
     try { envelope = await this.analysisClient.getScenes(trackId); } catch { /* offline */ }
     const scene = envelope?.scenes?.[0];
-    if (scene && scene.components?.length) {
+    this.#hasSavedScene = !!(scene && scene.components?.length);
+    if (this.#hasSavedScene) {
       const baseId = scene.base ?? this.#currentBaseId();
       this.compositor = new SceneCompositor({
         baseVisualizer: baseId ? this.registry.create(baseId) : null,
@@ -377,7 +381,38 @@ export class App {
     } else {
       this.#clearCompositor();
     }
-    if (this.#editorOpen) this.#editor.setScene(this.compositor?.getScene() ?? this.#blankScene());
+    if (this.#editorOpen) {
+      this.#editor.setScene(this.compositor?.getScene() ?? this.#blankScene());
+      this.#pushEditorTrack();
+    }
+  }
+
+  #pushEditorTrack() {
+    const trackId = this.lastAnalysis?.trackId ?? null;
+    this.#editor.setTrack({
+      trackId,
+      duration: this.audioEngine.duration,
+      beats: this.lastAnalysis?.beats ?? new Float64Array(0),
+      canSave: !!trackId && this.mode === 'precomputed',
+      hasSaved: this.#hasSavedScene,
+    });
+  }
+
+  /** Explicit "Load saved" — re-fetch the persisted scene and reapply it. */
+  async #loadSavedScene() {
+    await this.#applySceneForTrack();
+    if (this.#editorOpen) {
+      this.#ensureCompositor();
+      this.#editor.setScene(this.compositor.getScene());
+      this.#pushEditorTrack();
+    }
+  }
+
+  /** Empty the working scene (keeps the base). Save to persist the clear. */
+  #clearScene() {
+    this.#ensureCompositor();
+    this.compositor.setScene(this.#blankScene(this.#currentBaseId()));
+    this.#editor.setScene(this.compositor.getScene());
   }
 
   #clearCompositor() {
@@ -392,14 +427,8 @@ export class App {
     this.#transport.setEditorOpen(this.#editorOpen);
     if (this.#editorOpen) {
       this.#ensureCompositor();
-      const trackId = this.lastAnalysis?.trackId ?? null;
       this.#editor.setEnabled(true);
-      this.#editor.setTrack({
-        trackId,
-        duration: this.audioEngine.duration,
-        beats: this.lastAnalysis?.beats ?? new Float64Array(0),
-        canSave: !!trackId && this.mode === 'precomputed',
-      });
+      this.#pushEditorTrack();
       this.#editor.setScene(this.compositor.getScene());
     } else if (this.#canSaveScene()) {
       this.#saveScene(); // autosave on close
@@ -434,7 +463,9 @@ export class App {
     scene.base = this.#currentBaseId();
     try {
       await this.analysisClient.saveScene(trackId, { schemaVersion: 2, scenes: [scene] });
+      this.#hasSavedScene = scene.components.length > 0;
       this.#editor?.flashSaved();
+      if (this.#editorOpen) this.#pushEditorTrack();
     } catch (e) {
       console.warn('[audio-vis] scene save failed', e);
     }

@@ -11,7 +11,7 @@ const MAX_BEAT_TICKS = 400;
  * scene to drive its own panels between App pushes.
  *
  * Events: addComponent(type), removeComponent(id), updateComponent({id,patch}),
- *         setBase(id|null), seek(seconds), save, close
+ *         setBase(id|null), seek(seconds), save, loadSaved, clearScene, close
  */
 export class SceneEditor extends EventEmitter {
   #el = null;
@@ -24,6 +24,8 @@ export class SceneEditor extends EventEmitter {
   #noteEl = null;
   #paletteEl = null;
   #baseSelect = null;
+  #statusEl = null;
+  #loadBtn = null;
 
   #open = false;
   #scene = { base: null, components: [] };
@@ -61,6 +63,11 @@ export class SceneEditor extends EventEmitter {
         </div>
         <div class="av-editor-inspector"></div>
         <div class="av-editor-note"></div>
+        <div class="av-editor-scenestatus"></div>
+        <div class="av-editor-scenebar">
+          <button class="av-editor-load" title="Reload the saved scene, discarding unsaved edits">Load saved</button>
+          <button class="av-editor-clear" title="Remove all elements (save to persist)">Clear</button>
+        </div>
         <button class="av-editor-save">Save scene</button>
       </aside>
       <div class="av-editor-timeline">
@@ -84,9 +91,14 @@ export class SceneEditor extends EventEmitter {
     this.#playhead = this.#el.querySelector('.av-tl-playhead');
     this.#regionsEl = this.#el.querySelector('.av-tl-regions');
 
+    this.#statusEl = this.#el.querySelector('.av-editor-scenestatus');
+    this.#loadBtn = this.#el.querySelector('.av-editor-load');
+
     const listen = (t, e, h) => { t.addEventListener(e, h); this.#domListeners.push([t, e, h]); };
     listen(this.#el.querySelector('.av-editor-close'), 'click', () => this.emit('close'));
     listen(this.#el.querySelector('.av-editor-save'), 'click', () => this.emit('save'));
+    listen(this.#loadBtn, 'click', () => this.emit('loadSaved'));
+    listen(this.#el.querySelector('.av-editor-clear'), 'click', () => this.emit('clearScene'));
     listen(this.#baseSelect, 'change', () => {
       const v = this.#baseSelect.value;
       this.emit('setBase', v === '__none__' ? null : v);
@@ -110,13 +122,17 @@ export class SceneEditor extends EventEmitter {
     this.#el.classList.toggle('av-editor-disabled', !enabled);
   }
 
-  setTrack({ trackId, duration, beats, canSave }) {
+  setTrack({ trackId, duration, beats, canSave, hasSaved }) {
     this.#duration = duration || 0;
     this.#beats = beats || new Float64Array(0);
     this.#canSave = !!canSave;
     this.#noteEl.textContent = canSave ? '' :
       'Save needs a processed track (analysis server). Edits preview live but won\'t persist.';
     this.#el.querySelector('.av-editor-save').disabled = !canSave;
+    this.#statusEl.textContent = hasSaved
+      ? 'A saved scene is loaded for this track.'
+      : 'No saved scene yet for this track.';
+    this.#loadBtn.disabled = !hasSaved;
     this.#renderBeats();
     this.#renderRegions();
   }

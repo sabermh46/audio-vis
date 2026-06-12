@@ -577,6 +577,20 @@ button {
 
 .av-editor-inspector { display: flex; flex-direction: column; gap: 6px; }
 .av-editor-note { font-size: 11px; color: #f0b860; }
+.av-editor-scenestatus { font-size: 11px; color: var(--text-dim); }
+.av-editor-scenebar { display: flex; gap: 8px; }
+.av-editor-load,
+.av-editor-clear {
+  flex: 1;
+  padding: 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.av-editor-load:hover,
+.av-editor-clear:hover { border-color: var(--accent); }
+.av-editor-load:disabled { opacity: 0.4; cursor: default; }
 .av-editor-save {
   padding: 8px;
   border-radius: 8px;

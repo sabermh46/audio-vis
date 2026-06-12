@@ -110,6 +110,23 @@ try {
   check('hybrid renders (base + element)', lit > 5000, `${lit} px`);
   await p2.screenshot({ path: path.join(OUT, '16-editor-hybrid.png') });
 
+  // --- Explicit Load saved / Clear controls ---
+  await p2.click('[data-action="editor"]');
+  await p2.waitForSelector('.av-editor.open', { timeout: 4000 });
+  const status = await p2.textContent('.av-editor-scenestatus');
+  check('editor shows saved-scene status', /saved scene is loaded/i.test(status), status);
+  check('Load saved button enabled', !(await p2.$eval('.av-editor-load', (b) => b.disabled)));
+
+  await p2.click('.av-editor-clear');
+  await p2.waitForTimeout(150);
+  check('Clear empties the scene',
+    (await p2.evaluate(() => window.__app.compositor.getScene().components.length)) === 0);
+
+  await p2.click('.av-editor-load');
+  await p2.waitForTimeout(400);
+  check('Load saved restores the scene',
+    (await p2.evaluate(() => window.__app.compositor.getScene().components.length)) === 1);
+
   console.log('console errors:', errors.length ? JSON.stringify(errors, null, 2) : 'none');
 } finally {
   await browser?.close();
