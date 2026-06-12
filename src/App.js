@@ -450,7 +450,7 @@ export class App {
       z: this.compositor.getScene().components.length,
       bind: { signal: meta.defaultSignal },
       params: { ...meta.defaults },
-      automation: [],
+      automation: {},
     };
     this.compositor.addComponent(component);
     this.#editor.setScene(this.compositor.getScene());

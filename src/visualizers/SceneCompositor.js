@@ -1,6 +1,7 @@
 import { Visualizer } from './Visualizer.js';
 import { resolveSignal } from '../components/SignalResolver.js';
-import { evaluateEnvelope } from '../components/EnvelopeEvaluator.js';
+import { paramAt } from '../components/KeyframeEvaluator.js';
+import { migrateScene } from '../components/SceneMigrate.js';
 import { clamp } from '../utils/format.js';
 
 /**
@@ -31,7 +32,7 @@ export class SceneCompositor extends Visualizer {
   constructor({ baseVisualizer = null, scene, getTime, componentRegistry }) {
     super();
     this.#base = baseVisualizer;
-    this.#scene = scene ?? { base: null, canvas: { bg: '#05060c' }, components: [] };
+    this.#scene = migrateScene(scene ?? { base: null, canvas: { bg: '#05060c' }, components: [] });
     this.#getTime = getTime ?? (() => 0);
     this.#registry = componentRegistry;
   }
@@ -71,22 +72,32 @@ export class SceneCompositor extends Visualizer {
       const inst = this.#instances.get(c.id);
       if (!inst) continue;
       const p = c.params ?? {};
-      const intensity = evaluateEnvelope(
-        c.automation?.find((a) => a.param === 'intensity'),
-        t,
-        p.baseIntensity ?? 0.3,
-      );
+      const a = c.automation;
+
+      // Each animatable param: keyframed value at time t, else the static default.
+      const intensity = paramAt(a, 'intensity', t, p.baseIntensity ?? 0.3);
+      const sensitivity = paramAt(a, 'sensitivity', t, p.sensitivity ?? 1);
+      const size = paramAt(a, 'size', t, p.size ?? 0.25);
+      const opacity = paramAt(a, 'opacity', t, p.opacity ?? 1);
+      const color = paramAt(a, 'color', t, p.color ?? '#ffffff');
+
       const raw = resolveSignal(c.bind?.signal, frame);
-      const signal = clamp(raw * (p.sensitivity ?? 1) * intensity, 0, 1);
+      const signal = clamp(raw * sensitivity * intensity, 0, 1);
       const layout = {
         x: (p.x ?? 0.5) * width,
         y: (p.y ?? 0.5) * height,
-        size: (p.size ?? 0.25) * Math.min(width, height),
+        size: size * Math.min(width, height),
         width,
         height,
       };
+      // Animated color/size flow through params (elements read params.color,
+      // size via layout); opacity is out-of-band so elements multiply, not
+      // overwrite, their own alpha.
       ctx.save();
-      inst.render(ctx, frame, layout, { signal, raw, intensity, beat: frame.beat, params: p, dt });
+      inst.render(ctx, frame, layout, {
+        signal, raw, intensity, beat: frame.beat, dt, opacity,
+        params: { ...p, color, size, sensitivity },
+      });
       ctx.restore();
     }
   }
@@ -105,7 +116,7 @@ export class SceneCompositor extends Visualizer {
   }
 
   setScene(scene) {
-    this.#scene = scene ?? { base: null, canvas: { bg: '#05060c' }, components: [] };
+    this.#scene = migrateScene(scene ?? { base: null, canvas: { bg: '#05060c' }, components: [] });
     this.#rebuildInstances();
   }
 

@@ -64,28 +64,55 @@ try {
   const count = await page.evaluate(() => window.__app.compositor.getScene().components.length);
   check('element added', count === 1, `${count}`);
 
-  // Drag-paint a region on the timeline (~20%..60% of the width).
+  // Intensity is the default active param. Click the graph twice (no drag)
+  // to add two keyframes at different times + values.
   const box = await page.$('.av-tl-track');
   const bb = await box.boundingBox();
-  await page.mouse.move(bb.x + bb.width * 0.2, bb.y + bb.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(bb.x + bb.width * 0.4, bb.y + bb.height / 2, { steps: 6 });
-  await page.mouse.move(bb.x + bb.width * 0.6, bb.y + bb.height / 2, { steps: 6 });
-  await page.mouse.up();
-  await page.waitForTimeout(200);
+  await page.mouse.click(bb.x + bb.width * 0.3, bb.y + bb.height * 0.7); // low value
+  await page.waitForTimeout(80);
+  await page.mouse.click(bb.x + bb.width * 0.6, bb.y + bb.height * 0.2); // high value
+  await page.waitForTimeout(150);
 
-  const region = await page.evaluate(() => {
-    const c = window.__app.compositor.getScene().components[0];
-    return c.automation?.[0]?.regions?.[0] ?? null;
+  const kfs = await page.evaluate(() =>
+    window.__app.compositor.getScene().components[0].automation.intensity ?? []);
+  check('two sorted intensity keyframes', kfs.length === 2 && kfs[0].t <= kfs[1].t, JSON.stringify(kfs));
+  check('keyframe values differ by Y', Math.abs(kfs[0].v - kfs[1].v) > 0.1, JSON.stringify(kfs.map((k) => k.v)));
+
+  // Drag the first dot to a new time; still 2, still sorted.
+  const dot0 = await page.$('.av-tl-dot');
+  const db = await dot0.boundingBox();
+  await page.mouse.move(db.x + db.width / 2, db.y + db.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(bb.x + bb.width * 0.45, bb.y + bb.height * 0.5, { steps: 6 });
+  await page.mouse.up();
+  await page.waitForTimeout(120);
+  const kfs2 = await page.evaluate(() =>
+    window.__app.compositor.getScene().components[0].automation.intensity ?? []);
+  check('drag keeps 2 sorted keyframes', kfs2.length === 2 && kfs2[0].t <= kfs2[1].t, JSON.stringify(kfs2));
+
+  // Add a color keyframe via the Color param + the kf-edit color picker.
+  await page.click('.av-tl-param[data-param="color"]');
+  await page.waitForTimeout(80);
+  await page.mouse.click(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5);
+  await page.waitForTimeout(100);
+  await page.$eval('.av-tl-kf-edit input[type="color"]', (el) => {
+    el.value = '#ff0000'; el.dispatchEvent(new Event('input', { bubbles: true }));
   });
-  check('region painted', region && region.end > region.start, JSON.stringify(region));
+  await page.waitForTimeout(120);
+  const colorKf = await page.evaluate(() =>
+    window.__app.compositor.getScene().components[0].automation.color?.[0] ?? null);
+  check('color keyframe stored as hex', colorKf && /^#[0-9a-f]{6}$/i.test(colorKf.v), JSON.stringify(colorKf));
 
   // Save.
   await page.click('.av-editor-save');
   await page.waitForTimeout(500);
 
   const saved = await fetch(`http://127.0.0.1:8765/library/${tid}/scenes`).then(r => r.json());
-  check('scene persisted on server', saved.scenes?.[0]?.components?.length === 1, JSON.stringify(saved.scenes?.[0]?.components?.length));
+  const savedAuto = saved.scenes?.[0]?.components?.[0]?.automation ?? {};
+  check('scene persisted on server', saved.scenes?.[0]?.components?.length === 1);
+  check('keyframes persisted (object shape)',
+    Array.isArray(savedAuto.intensity) && savedAuto.intensity.length === 2 && Array.isArray(savedAuto.color),
+    JSON.stringify(Object.keys(savedAuto)));
 
   // --- Fresh page: scene must reapply on reopen ---
   const p2 = await browser.newPage({ viewport: { width: 1280, height: 800 } });
@@ -126,6 +153,32 @@ try {
   await p2.waitForTimeout(400);
   check('Load saved restores the scene',
     (await p2.evaluate(() => window.__app.compositor.getScene().components.length)) === 1);
+
+  // --- Legacy migration: a region-shape scene must upgrade to keyframes on load ---
+  await fetch(`http://127.0.0.1:8765/library/${tid}/scenes`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ schemaVersion: 2, scenes: [{
+      id: 'legacy', name: 'legacy', base: 'bars', canvas: { bg: '#05060c' },
+      components: [{
+        id: 'lc1', type: 'bouncingStar', enabled: true, z: 0, bind: { signal: 'stem.bass' },
+        params: { x: 0.5, y: 0.5, size: 0.2, color: '#6c5ce7', baseIntensity: 0.3, sensitivity: 1 },
+        automation: [{ param: 'intensity', regions: [{ start: 2, end: 6, value: 1, rampIn: 0.5, rampOut: 0.5 }] }],
+      }],
+    }] }),
+  });
+  const p3 = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  p3.on('pageerror', (e) => errors.push(String(e)));
+  await loadTrack(p3);
+  await p3.click(`.av-lib-card[data-id="${tid}"] .av-lib-main`);
+  await p3.waitForSelector('[data-action="play"]:not([disabled])', { timeout: 15000 });
+  await p3.waitForTimeout(600);
+  const migrated = await p3.evaluate(() => {
+    const a = window.__app.compositor?.getScene().components[0]?.automation;
+    return { isObject: a && !Array.isArray(a), kfs: a?.intensity ?? null };
+  });
+  check('legacy region migrated to keyframe object on load',
+    migrated.isObject && Array.isArray(migrated.kfs) && migrated.kfs.length === 4,
+    JSON.stringify(migrated.kfs));
 
   console.log('console errors:', errors.length ? JSON.stringify(errors, null, 2) : 'none');
 } finally {

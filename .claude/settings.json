@@ -28,7 +28,8 @@
       "Bash(server/.venv/Scripts/python -m uvicorn app:app --app-dir server --port 8765)",
       "Bash(.venv/Scripts/python -c \"import app; print\\('app imports OK'\\)\")",
       "Bash(node .dev/library-endpoint.mjs)",
-      "Bash(node .dev/scenes-endpoint.mjs)"
+      "Bash(node .dev/scenes-endpoint.mjs)",
+      "Bash(node .dev/keyframe-direct.mjs)"
     ]
   }
 }

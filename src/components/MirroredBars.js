@@ -12,7 +12,7 @@ export class MirroredBars extends VisualizerComponent {
     return {
       type: 'mirroredBars',
       name: 'Mirrored Bars',
-      defaults: { x: 0.5, y: 0.5, size: 0.4, color: '#00cec9', baseIntensity: 0.3, sensitivity: 1 },
+      defaults: { x: 0.5, y: 0.5, size: 0.4, color: '#00cec9', baseIntensity: 0.3, sensitivity: 1, opacity: 1 },
       defaultSignal: 'stem.vocals',
       signals: VisualizerComponent.meta.signals,
     };
@@ -31,7 +31,7 @@ export class MirroredBars extends VisualizerComponent {
 
   #heights = new Float32Array(BARS);
 
-  render(ctx, frame, layout, { signal, raw, params }) {
+  render(ctx, frame, layout, { signal, raw, params, opacity = 1 }) {
     const span = layout.size * 2;        // total width
     const gap = span / BARS * 0.3;
     const bw = (span / BARS) - gap;
@@ -42,7 +42,7 @@ export class MirroredBars extends VisualizerComponent {
     ctx.fillStyle = params.color;
     ctx.shadowColor = params.color;
     ctx.shadowBlur = 6 + signal * 18;
-    ctx.globalAlpha = 0.4 + signal * 0.6;
+    ctx.globalAlpha = (0.4 + signal * 0.6) * opacity;
 
     for (let i = 0; i < BARS; i++) {
       // Sample the spectrum (skip the very lowest bins for visual interest).

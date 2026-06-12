@@ -13,7 +13,7 @@ export class VisualizerComponent {
     return {
       type: 'base',
       name: 'Component',
-      defaults: { x: 0.5, y: 0.5, size: 0.25, color: '#6c5ce7', baseIntensity: 0.3, sensitivity: 1 },
+      defaults: { x: 0.5, y: 0.5, size: 0.25, color: '#6c5ce7', baseIntensity: 0.3, sensitivity: 1, opacity: 1 },
       defaultSignal: 'volume',
       signals: SIGNALS,
     };

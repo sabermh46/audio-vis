@@ -1,26 +1,35 @@
 import { EventEmitter } from '../core/EventEmitter.js';
-import { formatTime } from '../utils/format.js';
+import { clamp } from '../utils/format.js';
+import { PARAM_RANGES } from '../components/KeyframeEvaluator.js';
+import { normalizeKeyframes } from '../components/SceneMigrate.js';
 
 const MAX_BEAT_TICKS = 400;
+const PAD = 6;                 // vertical padding so dots aren't clipped
+const ANIM_PARAMS = ['intensity', 'sensitivity', 'size', 'opacity', 'color'];
+// Inspector field → the static fallback key the lane's empty-state reads.
+const FALLBACK_KEY = { intensity: 'baseIntensity', sensitivity: 'sensitivity', size: 'size', opacity: 'opacity', color: 'color' };
 
 /**
  * Scene editor: place reactive elements on the stage, bind each to a signal,
- * set its default intensity, and drag-paint time-ranges on the timeline where
- * it surges toward full intensity. Emits intents only; App mediates and keeps
- * the SceneCompositor (the renderer) in sync. Holds a working copy of the
- * scene to drive its own panels between App pushes.
+ * set static defaults, and author per-parameter KEYFRAMES on a value-graph
+ * timeline (pick a param → click to add dots, drag in time/value; a polyline
+ * shows the curve). Emits intents only; App mediates and keeps the
+ * SceneCompositor (the renderer) in sync. Holds a working copy of the scene.
  *
  * Events: addComponent(type), removeComponent(id), updateComponent({id,patch}),
  *         setBase(id|null), seek(seconds), save, loadSaved, clearScene, close
  */
 export class SceneEditor extends EventEmitter {
   #el = null;
-  #placeLayer = null;   // transparent overlay holding element handles
+  #placeLayer = null;
   #listEl = null;
   #inspectorEl = null;
-  #tl = null;           // timeline track element
+  #tl = null;            // timeline track element
   #playhead = null;
-  #regionsEl = null;
+  #dotsEl = null;
+  #curveEl = null;       // <polyline>
+  #kfEditEl = null;
+  #paramBarEl = null;
   #noteEl = null;
   #paletteEl = null;
   #baseSelect = null;
@@ -30,12 +39,13 @@ export class SceneEditor extends EventEmitter {
   #open = false;
   #scene = { base: null, components: [] };
   #selectedId = null;
-  #selectedRegion = -1;
+  #activeParam = 'intensity';
+  #selectedKf = -1;
   #duration = 0;
   #beats = new Float64Array(0);
   #canSave = false;
-  #components = [];     // palette meta
-  #baseOptions = [];    // [{id,name}]
+  #components = [];
+  #baseOptions = [];
   #domListeners = [];
   #dragging = false;
 
@@ -71,12 +81,18 @@ export class SceneEditor extends EventEmitter {
         <button class="av-editor-save">Save scene</button>
       </aside>
       <div class="av-editor-timeline">
+        <div class="av-tl-params">
+          ${ANIM_PARAMS.map((p, i) =>
+            `<button class="av-tl-param${i === 0 ? ' active' : ''}" data-param="${p}">${p[0].toUpperCase()}${p.slice(1)}</button>`).join('')}
+        </div>
         <div class="av-tl-track">
           <div class="av-tl-beats"></div>
-          <div class="av-tl-regions"></div>
+          <svg class="av-tl-curve"><polyline points=""></polyline></svg>
+          <div class="av-tl-dots"></div>
           <div class="av-tl-playhead"></div>
         </div>
-        <div class="av-tl-hint">Select an element, then drag on the timeline to paint a full-intensity range</div>
+        <div class="av-tl-hint">Pick a parameter, then click the graph to add a keyframe; drag dots to move; Del removes the selected one.</div>
+        <div class="av-tl-kf-edit"></div>
       </div>
     `;
     stage.appendChild(this.#el);
@@ -89,8 +105,10 @@ export class SceneEditor extends EventEmitter {
     this.#noteEl = this.#el.querySelector('.av-editor-note');
     this.#tl = this.#el.querySelector('.av-tl-track');
     this.#playhead = this.#el.querySelector('.av-tl-playhead');
-    this.#regionsEl = this.#el.querySelector('.av-tl-regions');
-
+    this.#dotsEl = this.#el.querySelector('.av-tl-dots');
+    this.#curveEl = this.#el.querySelector('.av-tl-curve polyline');
+    this.#kfEditEl = this.#el.querySelector('.av-tl-kf-edit');
+    this.#paramBarEl = this.#el.querySelector('.av-tl-params');
     this.#statusEl = this.#el.querySelector('.av-editor-scenestatus');
     this.#loadBtn = this.#el.querySelector('.av-editor-load');
 
@@ -103,11 +121,17 @@ export class SceneEditor extends EventEmitter {
       const v = this.#baseSelect.value;
       this.emit('setBase', v === '__none__' ? null : v);
     });
+    listen(this.#paramBarEl, 'click', (e) => {
+      const btn = e.target.closest('.av-tl-param');
+      if (!btn) return;
+      this.#activeParam = btn.dataset.param;
+      this.#selectedKf = -1;
+      for (const b of this.#paramBarEl.children) b.classList.toggle('active', b === btn);
+      this.#renderLane();
+    });
     listen(document, 'keydown', (e) => {
       if (!this.#open) return;
-      if ((e.key === 'Delete' || e.key === 'Backspace') && this.#selectedRegion >= 0) {
-        this.#deleteSelectedRegion();
-      }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && this.#selectedKf >= 0) this.#deleteSelectedKf();
     });
     this.#wireTimeline(listen);
   }
@@ -118,9 +142,7 @@ export class SceneEditor extends EventEmitter {
 
   setBaseOptions(options) { this.#baseOptions = options; this.#renderBaseOptions(); }
 
-  setEnabled(enabled) {
-    this.#el.classList.toggle('av-editor-disabled', !enabled);
-  }
+  setEnabled(enabled) { this.#el.classList.toggle('av-editor-disabled', !enabled); }
 
   setTrack({ trackId, duration, beats, canSave, hasSaved }) {
     this.#duration = duration || 0;
@@ -134,7 +156,7 @@ export class SceneEditor extends EventEmitter {
       : 'No saved scene yet for this track.';
     this.#loadBtn.disabled = !hasSaved;
     this.#renderBeats();
-    this.#renderRegions();
+    this.#renderLane();
   }
 
   setScene(scene) {
@@ -142,12 +164,12 @@ export class SceneEditor extends EventEmitter {
     if (!this.#scene.components.find((c) => c.id === this.#selectedId)) {
       this.#selectedId = this.#scene.components[0]?.id ?? null;
     }
-    this.#selectedRegion = -1;
+    this.#selectedKf = -1;
     if (this.#baseSelect) this.#baseSelect.value = this.#scene.base ?? '__none__';
     this.#renderList();
     this.#renderInspector();
     this.#renderHandles();
-    this.#renderRegions();
+    this.#renderLane();
   }
 
   setTime(seconds) {
@@ -205,8 +227,8 @@ export class SceneEditor extends EventEmitter {
         <span class="av-editor-item-sig">${c.bind?.signal ?? ''}</span>
         <button class="av-editor-item-del" title="Remove">🗑</button>`;
       row.querySelector('.av-editor-item-name').addEventListener('click', () => {
-        this.#selectedId = c.id; this.#selectedRegion = -1;
-        this.#renderList(); this.#renderInspector(); this.#renderHandles(); this.#renderRegions();
+        this.#selectedId = c.id; this.#selectedKf = -1;
+        this.#renderList(); this.#renderInspector(); this.#renderHandles(); this.#renderLane();
       });
       row.querySelector('.av-editor-item-del').addEventListener('click', (e) => {
         e.stopPropagation();
@@ -228,24 +250,29 @@ export class SceneEditor extends EventEmitter {
     this.#inspectorEl.innerHTML = `
       <label class="av-editor-label">Signal</label>
       <select data-f="signal">${sigOpts}</select>
-      <label class="av-editor-label">Default intensity <b>${Math.round(p.baseIntensity * 100)}%</b></label>
-      <input type="range" data-f="baseIntensity" min="0" max="1" step="0.01" value="${p.baseIntensity}">
+      <label class="av-editor-label">Default intensity <b>${Math.round((p.baseIntensity ?? 0.3) * 100)}%</b></label>
+      <input type="range" data-f="baseIntensity" min="0" max="1" step="0.01" value="${p.baseIntensity ?? 0.3}">
       <label class="av-editor-label">Sensitivity</label>
       <input type="range" data-f="sensitivity" min="0" max="2" step="0.05" value="${p.sensitivity ?? 1}">
       <label class="av-editor-label">Size</label>
       <input type="range" data-f="size" min="0.05" max="0.6" step="0.01" value="${p.size}">
+      <label class="av-editor-label">Opacity</label>
+      <input type="range" data-f="opacity" min="0" max="1" step="0.01" value="${p.opacity ?? 1}">
       <label class="av-editor-label">Color</label>
-      <input type="color" data-f="color" value="${p.color}">`;
+      <input type="color" data-f="color" value="${p.color}">
+      <div class="av-editor-hint">Sliders set the value used when a parameter has no keyframes.</div>`;
 
     this.#inspectorEl.querySelector('[data-f="signal"]').addEventListener('change', (e) =>
       this.#patch({ bind: { signal: e.target.value } }));
-    for (const f of ['baseIntensity', 'sensitivity', 'size', 'color']) {
+    for (const f of ['baseIntensity', 'sensitivity', 'size', 'opacity', 'color']) {
       const input = this.#inspectorEl.querySelector(`[data-f="${f}"]`);
       const evt = f === 'color' ? 'change' : 'input';
       input.addEventListener(evt, (e) => {
         const v = f === 'color' ? e.target.value : +e.target.value;
         this.#patch({ params: { ...this.#selected().params, [f]: v } });
         if (f === 'baseIntensity') this.#renderInspector();
+        // The empty-state curve tracks the static fallback — redraw it.
+        if (!this.#kfs(false)?.length) this.#renderLane();
       });
     }
   }
@@ -275,8 +302,8 @@ export class SceneEditor extends EventEmitter {
 
     const onMove = (e) => {
       const rect = this.#placeLayer.getBoundingClientRect();
-      const x = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-      const y = Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height));
+      const x = clamp((e.clientX - rect.left) / rect.width, 0, 1);
+      const y = clamp((e.clientY - rect.top) / rect.height, 0, 1);
       handle.style.left = `${x * 100}%`;
       handle.style.top = `${y * 100}%`;
       this.#patch({ params: { ...this.#selected().params, x, y } });
@@ -293,10 +320,45 @@ export class SceneEditor extends EventEmitter {
     });
   }
 
-  // ---- timeline ----
+  // ---- timeline / keyframe lane ----
 
   #secToPx(t) { return (t / (this.#duration || 1)) * this.#tl.clientWidth; }
   #pxToSec(px) { return (px / (this.#tl.clientWidth || 1)) * (this.#duration || 0); }
+
+  #range() { return PARAM_RANGES[this.#activeParam]; }
+
+  #valToPy(v) {
+    const { min, max } = this.#range();
+    const H = this.#tl.clientHeight || 54;
+    const f = (v - min) / (max - min || 1);
+    return PAD + (1 - f) * (H - 2 * PAD);
+  }
+
+  #pyToVal(py) {
+    const { min, max } = this.#range();
+    const H = this.#tl.clientHeight || 54;
+    const f = 1 - (py - PAD) / (H - 2 * PAD || 1);
+    return clamp(min + f * (max - min), min, max);
+  }
+
+  /** Active param's keyframe array (live ref). `create` adds the key if absent. */
+  #kfs(create = true) {
+    const c = this.#selected();
+    if (!c) return null;
+    if (!create) return c.automation?.[this.#activeParam];
+    c.automation = c.automation ?? {};
+    c.automation[this.#activeParam] = c.automation[this.#activeParam] ?? [];
+    return c.automation[this.#activeParam];
+  }
+
+  /** Sort+dedupe the active param; prune if empty; emit the full automation. */
+  #commitKfs() {
+    const c = this.#selected();
+    if (!c) return;
+    c.automation[this.#activeParam] = normalizeKeyframes(c.automation[this.#activeParam]);
+    if (!c.automation[this.#activeParam].length) delete c.automation[this.#activeParam];
+    this.emit('updateComponent', { id: c.id, patch: { automation: c.automation } });
+  }
 
   #renderBeats() {
     const beatsEl = this.#el.querySelector('.av-tl-beats');
@@ -312,71 +374,69 @@ export class SceneEditor extends EventEmitter {
     }
   }
 
-  #renderRegions() {
-    this.#regionsEl.textContent = '';
-    const c = this.#selected();
-    const entry = c?.automation?.find((a) => a.param === 'intensity');
-    const regions = entry?.regions ?? [];
-    regions.forEach((r, idx) => {
-      const div = document.createElement('div');
-      div.className = 'av-tl-region' + (idx === this.#selectedRegion ? ' active' : '');
-      div.style.left = `${(r.start / (this.#duration || 1)) * 100}%`;
-      div.style.width = `${((r.end - r.start) / (this.#duration || 1)) * 100}%`;
-      div.title = `${formatTime(r.start)}–${formatTime(r.end)} @ ${Math.round(r.value * 100)}%`;
-      div.innerHTML = '<span class="av-tl-handle l"></span><span class="av-tl-handle r"></span>';
-      div.addEventListener('pointerdown', (e) => this.#startRegionDrag(e, idx));
-      this.#regionsEl.appendChild(div);
+  #renderLane() {
+    this.#renderDots();
+    this.#renderCurve();
+    this.#renderKfEdit();
+  }
+
+  #renderDots() {
+    this.#dotsEl.textContent = '';
+    const kfs = this.#kfs(false);
+    if (!kfs) return;
+    const isColor = this.#range().color;
+    const midY = (this.#tl.clientHeight || 54) / 2;
+    kfs.forEach((k, idx) => {
+      const dot = document.createElement('div');
+      dot.className = 'av-tl-dot' + (idx === this.#selectedKf ? ' active' : '');
+      dot.style.left = `${(k.t / (this.#duration || 1)) * 100}%`;
+      dot.style.top = `${isColor ? midY : this.#valToPy(k.v)}px`;
+      if (isColor) dot.style.background = k.v;
+      dot.addEventListener('pointerdown', (e) => this.#startDotDrag(e, idx));
+      this.#dotsEl.appendChild(dot);
     });
   }
 
-  #regionEntry() {
-    const c = this.#selected();
-    if (!c) return null;
-    c.automation = c.automation ?? [];
-    let entry = c.automation.find((a) => a.param === 'intensity');
-    if (!entry) { entry = { param: 'intensity', regions: [] }; c.automation.push(entry); }
-    return entry;
-  }
-
-  #commitRegions() {
-    const c = this.#selected();
-    if (c) this.emit('updateComponent', { id: c.id, patch: { automation: c.automation } });
+  #renderCurve() {
+    const kfs = this.#kfs(false);
+    if (this.#range().color) { this.#curveEl.setAttribute('points', ''); return; }
+    if (kfs && kfs.length) {
+      this.#curveEl.setAttribute('points',
+        kfs.map((k) => `${this.#secToPx(k.t)},${this.#valToPy(k.v)}`).join(' '));
+    } else {
+      // Empty state: a flat line at the static fallback value.
+      const c = this.#selected();
+      const fb = c ? (c.params[FALLBACK_KEY[this.#activeParam]] ?? 0) : 0;
+      const y = this.#valToPy(fb);
+      const w = this.#tl.clientWidth;
+      this.#curveEl.setAttribute('points', `0,${y} ${w},${y}`);
+    }
   }
 
   #wireTimeline(listen) {
-    // Drag on empty timeline → create a region (or seek on a plain click).
     listen(this.#tl, 'pointerdown', (e) => {
-      if (e.target.closest('.av-tl-region')) return; // region handles its own drag
+      if (e.target.closest('.av-tl-dot')) return; // dot handles its own drag
       const c = this.#selected();
       const rect = this.#tl.getBoundingClientRect();
-      const startSec = this.#pxToSec(e.clientX - rect.left);
-      if (!c) { this.emit('seek', startSec); return; }
+      const sec = this.#pxToSec(e.clientX - rect.left);
+      if (!c) { this.emit('seek', sec); return; }
 
       this.#dragging = false;
-      const entry = this.#regionEntry();
-      const region = { start: startSec, end: startSec, value: 1, rampIn: 0.3, rampOut: 0.3 };
-      const onMove = (ev) => {
-        this.#dragging = true;
-        const sec = this.#pxToSec(ev.clientX - rect.left);
-        region.start = Math.max(0, Math.min(startSec, sec));
-        region.end = Math.min(this.#duration, Math.max(startSec, sec));
-        // live preview without committing every move
-        const preview = entry.regions.concat(region);
-        this.#previewRegions(preview);
-      };
+      const downY = e.clientY - rect.top;
+      const onMove = () => { this.#dragging = true; };
       const onUp = (ev) => {
         this.#tl.removeEventListener('pointermove', onMove);
         this.#tl.releasePointerCapture?.(ev.pointerId);
-        if (this.#dragging && region.end - region.start > 0.1) {
-          entry.regions.push(region);
-          this.#selectedRegion = entry.regions.length - 1;
-          this.#commitRegions();
-          this.#renderRegions();
-          this.#renderRegionInspector();
-        } else {
-          this.emit('seek', startSec); // it was a click, not a drag
-        }
-        this.#dragging = false;
+        if (this.#dragging) { this.#dragging = false; return; }
+        // A click → add a keyframe.
+        const range = this.#range();
+        const t = clamp(sec, 0, this.#duration);
+        const v = range.color ? (c.params.color ?? '#ffffff') : this.#pyToVal(downY);
+        this.#kfs().push({ t, v });
+        this.#commitKfs();
+        const arr = this.#kfs(false) ?? [];
+        this.#selectedKf = arr.findIndex((k) => Math.abs(k.t - t) < 1e-3);
+        this.#renderLane();
       };
       this.#tl.setPointerCapture?.(e.pointerId);
       this.#tl.addEventListener('pointermove', onMove);
@@ -384,88 +444,71 @@ export class SceneEditor extends EventEmitter {
     });
   }
 
-  #previewRegions(regions) {
-    this.#regionsEl.textContent = '';
-    for (const r of regions) {
-      const div = document.createElement('div');
-      div.className = 'av-tl-region';
-      div.style.left = `${(r.start / (this.#duration || 1)) * 100}%`;
-      div.style.width = `${((r.end - r.start) / (this.#duration || 1)) * 100}%`;
-      this.#regionsEl.appendChild(div);
-    }
-  }
-
-  #startRegionDrag(e, idx) {
+  #startDotDrag(e, idx) {
     e.stopPropagation();
-    const entry = this.#regionEntry();
-    const region = entry.regions[idx];
-    if (!region) return;
-    this.#selectedRegion = idx;
-    this.#renderRegions();
-    this.#renderRegionInspector();
-
+    this.#selectedKf = idx;
+    this.#renderLane();
     const rect = this.#tl.getBoundingClientRect();
-    const edge = e.target.classList.contains('l') ? 'l'
-      : e.target.classList.contains('r') ? 'r' : 'move';
-    const grabSec = this.#pxToSec(e.clientX - rect.left);
-    const orig = { ...region };
+    const kfs = this.#kfs();
+    const ref = kfs[idx]; // live ref; mutate during drag, sort once on up
+    if (!ref) return;
+    const isColor = this.#range().color;
+    let moved = false;
 
     const onMove = (ev) => {
-      const sec = this.#pxToSec(ev.clientX - rect.left);
-      const delta = sec - grabSec;
-      if (edge === 'l') region.start = Math.max(0, Math.min(region.end - 0.1, sec));
-      else if (edge === 'r') region.end = Math.min(this.#duration, Math.max(region.start + 0.1, sec));
-      else {
-        const len = orig.end - orig.start;
-        region.start = Math.max(0, Math.min(this.#duration - len, orig.start + delta));
-        region.end = region.start + len;
-      }
-      this.#renderRegions();
+      moved = true;
+      ref.t = clamp(this.#pxToSec(ev.clientX - rect.left), 0, this.#duration);
+      if (!isColor) ref.v = this.#pyToVal(ev.clientY - rect.top);
+      this.#renderDots();
+      this.#renderCurve();
     };
     const onUp = (ev) => {
       this.#tl.removeEventListener('pointermove', onMove);
       this.#tl.releasePointerCapture?.(ev.pointerId);
-      this.#commitRegions();
+      this.#commitKfs();
+      const arr = this.#kfs(false) ?? [];
+      this.#selectedKf = arr.indexOf(ref); // re-find after sort, by identity
+      this.#renderLane();
+      void moved;
     };
     this.#tl.setPointerCapture?.(e.pointerId);
     this.#tl.addEventListener('pointermove', onMove);
     this.#tl.addEventListener('pointerup', onUp, { once: true });
   }
 
-  #renderRegionInspector() {
-    const entry = this.#selected()?.automation?.find((a) => a.param === 'intensity');
-    const r = entry?.regions?.[this.#selectedRegion];
-    let box = this.#el.querySelector('.av-tl-region-edit');
-    if (!box) {
-      box = document.createElement('div');
-      box.className = 'av-tl-region-edit';
-      this.#el.querySelector('.av-editor-timeline').appendChild(box);
+  #renderKfEdit() {
+    const kfs = this.#kfs(false);
+    const k = kfs?.[this.#selectedKf];
+    if (!k) { this.#kfEditEl.innerHTML = ''; return; }
+    const range = this.#range();
+    if (range.color) {
+      this.#kfEditEl.innerHTML = `
+        <span>Keyframe @ ${k.t.toFixed(2)}s</span>
+        <input type="color" data-k="v" value="${k.v}">
+        <button class="av-tl-kf-del">Delete</button>`;
+      this.#kfEditEl.querySelector('[data-k="v"]').addEventListener('input', (e) => {
+        k.v = e.target.value; this.#commitKfs(); this.#renderDots();
+      });
+    } else {
+      this.#kfEditEl.innerHTML = `
+        <span>Keyframe @ ${k.t.toFixed(2)}s = <b>${k.v.toFixed(2)}</b></span>
+        <input type="range" data-k="v" min="${range.min}" max="${range.max}" step="0.01" value="${k.v}">
+        <button class="av-tl-kf-del">Delete</button>`;
+      this.#kfEditEl.querySelector('[data-k="v"]').addEventListener('input', (e) => {
+        k.v = +e.target.value; this.#commitKfs(); this.#renderDots(); this.#renderCurve();
+        this.#kfEditEl.querySelector('b').textContent = k.v.toFixed(2);
+      });
     }
-    if (!r) { box.innerHTML = ''; return; }
-    box.innerHTML = `
-      <span>Region ${formatTime(r.start)}–${formatTime(r.end)}</span>
-      <label>intensity <b>${Math.round(r.value * 100)}%</b></label>
-      <input type="range" data-r="value" min="0" max="1" step="0.01" value="${r.value}">
-      <label>ramp</label>
-      <input type="range" data-r="rampIn" min="0" max="3" step="0.1" value="${r.rampIn}">
-      <button class="av-tl-region-del">Delete</button>`;
-    box.querySelector('[data-r="value"]').addEventListener('input', (e) => {
-      r.value = +e.target.value; this.#commitRegions(); this.#renderRegionInspector();
-    });
-    box.querySelector('[data-r="rampIn"]').addEventListener('input', (e) => {
-      r.rampIn = +e.target.value; r.rampOut = +e.target.value; this.#commitRegions();
-    });
-    box.querySelector('.av-tl-region-del').addEventListener('click', () => this.#deleteSelectedRegion());
+    this.#kfEditEl.querySelector('.av-tl-kf-del').addEventListener('click', () => this.#deleteSelectedKf());
   }
 
-  #deleteSelectedRegion() {
-    const entry = this.#selected()?.automation?.find((a) => a.param === 'intensity');
-    if (!entry || this.#selectedRegion < 0) return;
-    entry.regions.splice(this.#selectedRegion, 1);
-    this.#selectedRegion = -1;
-    this.#commitRegions();
-    this.#renderRegions();
-    this.#renderRegionInspector();
+  #deleteSelectedKf() {
+    const kfs = this.#kfs(false);
+    if (!kfs || this.#selectedKf < 0) return;
+    kfs.splice(this.#selectedKf, 1);
+    this.#selectedKf = -1;
+    this.#commitKfs();
+    this.#renderLane();
   }
 
   destroy() {

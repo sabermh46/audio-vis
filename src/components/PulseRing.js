@@ -12,7 +12,7 @@ export class PulseRing extends VisualizerComponent {
     return {
       type: 'pulseRing',
       name: 'Pulse Ring',
-      defaults: { x: 0.5, y: 0.5, size: 0.3, color: '#e056fd', baseIntensity: 0.3, sensitivity: 1 },
+      defaults: { x: 0.5, y: 0.5, size: 0.3, color: '#e056fd', baseIntensity: 0.3, sensitivity: 1, opacity: 1 },
       defaultSignal: 'stem.drums',
       signals: VisualizerComponent.meta.signals,
     };
@@ -33,7 +33,7 @@ export class PulseRing extends VisualizerComponent {
   #rings = [];
   #cooldown = 0;
 
-  render(ctx, frame, layout, { signal, intensity, beat, params, dt }) {
+  render(ctx, frame, layout, { signal, intensity, beat, params, dt, opacity = 1 }) {
     this.#cooldown -= dt;
     // Spawn on a beat (or a strong signal swell) while reasonably intense.
     if ((beat || signal > 0.6) && intensity > 0.12 && this.#cooldown <= 0) {
@@ -48,7 +48,7 @@ export class PulseRing extends VisualizerComponent {
       ring.r += dt * layout.size * 2.2;
       ring.alpha -= dt * 0.8;
       if (ring.alpha <= 0) continue;
-      ctx.globalAlpha = ring.alpha;
+      ctx.globalAlpha = ring.alpha * opacity;
       ctx.lineWidth = 1 + signal * 3;
       ctx.shadowBlur = 10 * ring.alpha;
       ctx.beginPath();

@@ -11,7 +11,7 @@ export class BouncingStar extends VisualizerComponent {
     return {
       type: 'bouncingStar',
       name: 'Bouncing Star',
-      defaults: { x: 0.5, y: 0.6, size: 0.18, color: '#6c5ce7', baseIntensity: 0.3, sensitivity: 1 },
+      defaults: { x: 0.5, y: 0.6, size: 0.18, color: '#6c5ce7', baseIntensity: 0.3, sensitivity: 1, opacity: 1 },
       defaultSignal: 'stem.bass',
       signals: VisualizerComponent.meta.signals,
     };
@@ -27,7 +27,7 @@ export class BouncingStar extends VisualizerComponent {
   #vel = 0;     // spring velocity
   #spin = 0;
 
-  render(ctx, frame, layout, { signal, params, dt }) {
+  render(ctx, frame, layout, { signal, params, dt, opacity = 1 }) {
     // Spring toward the signal for a bouncy feel.
     const target = signal;
     const k = 90;   // stiffness
@@ -44,7 +44,7 @@ export class BouncingStar extends VisualizerComponent {
     ctx.shadowColor = params.color;
     ctx.shadowBlur = 12 + signal * 40;
     ctx.fillStyle = params.color;
-    ctx.globalAlpha = 0.35 + signal * 0.65;
+    ctx.globalAlpha = (0.35 + signal * 0.65) * opacity;
     drawStar(ctx, 0, 0, outer, inner, 0);
     ctx.fill();
     ctx.globalAlpha = 1;

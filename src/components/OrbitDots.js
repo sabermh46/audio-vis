@@ -11,7 +11,7 @@ export class OrbitDots extends VisualizerComponent {
     return {
       type: 'orbitDots',
       name: 'Orbit Dots',
-      defaults: { x: 0.5, y: 0.5, size: 0.22, color: '#feca57', baseIntensity: 0.3, sensitivity: 1 },
+      defaults: { x: 0.5, y: 0.5, size: 0.22, color: '#feca57', baseIntensity: 0.3, sensitivity: 1, opacity: 1 },
       defaultSignal: 'stem.other',
       signals: VisualizerComponent.meta.signals,
     };
@@ -33,7 +33,7 @@ export class OrbitDots extends VisualizerComponent {
 
   #angle = 0;
 
-  render(ctx, frame, layout, { signal, params, dt }) {
+  render(ctx, frame, layout, { signal, params, dt, opacity = 1 }) {
     this.#angle += dt * (0.5 + signal * 4);
     const radius = layout.size * (0.5 + signal * 0.6);
     const dotR = layout.size * (0.06 + signal * 0.1);
@@ -41,7 +41,7 @@ export class OrbitDots extends VisualizerComponent {
     ctx.fillStyle = params.color;
     ctx.shadowColor = params.color;
     ctx.shadowBlur = 8 + signal * 24;
-    ctx.globalAlpha = 0.4 + signal * 0.6;
+    ctx.globalAlpha = (0.4 + signal * 0.6) * opacity;
 
     for (let i = 0; i < DOTS; i++) {
       const a = this.#angle + (i / DOTS) * Math.PI * 2;
