@@ -29,6 +29,11 @@ The app auto-detects the server. If it's not running, everything still works in 
 - If separation fails or the track is longer than 12 minutes, the server transparently returns the DSP-only analysis (`ml: false`).
 - `POST /analyze?ml=0` skips ML entirely (used by fast tests).
 - With `--reload` during development, watchfiles may choke on the venv; prefer running without it and restarting manually.
+- Separation uses all **physical** CPU cores (PyTorch's default). Forcing all *logical* cores (hyperthreads) is measurably slower; override only if needed with `AUDIO_VIS_THREADS=<n>` before launching uvicorn. No CUDA/ROCm on Windows/AMD, so CPU is the only path.
+
+## Track library
+
+Processed tracks are saved under `server/library/<trackId>/` (`audio.<ext>` original file, `analysis.json.gz`, `meta.json`, `scenes.json`). On launch a modal offers **Process new audio** or **Open from library** (instant — no re-analysis). `trackId = sha256(original)[:16]` dedups, so a song is only ever processed once. The 🗂 button reopens the library mid-session. Endpoints: `GET /library`, `GET /library/{id}/audio` (HTTP Range for seeking), `GET /library/{id}/analysis`, `DELETE`, `PATCH` (rename), `PUT /library/{id}/scenes` (reserved for the upcoming timeline editor). Audio is served cross-origin, so `AudioEngine` sets `crossOrigin='anonymous'` to keep the analyser tap clean.
 
 ## Two analysis modes
 
@@ -45,6 +50,7 @@ Music has a ~1/f spectral tilt: on a shared dB scale, bass always reads near max
 - **Band separation** — bass (20–250 Hz), mid/vocal (250 Hz–4 kHz), treble (4–20 kHz), each normalized to its own dynamics
 - **Beats, tempo, onsets, harmonic/percussive split** — exact from the server, approximated in realtime mode
 - **ML stem separation** — true vocals/drums/bass/other isolation (Demucs v4), drums-derived beat tracking, per-track caching
+- **Track library** — every processed song is saved server-side (audio + analysis); a startup modal lets you process new audio or reopen a decoded track instantly
 - **Visualizer templates** — a gallery (🎨) to switch visualizers live; ships with Frequency Bars, Waveform, and Stem Shapes
 - Fullscreen, DPR-sharp canvas, dark UI
 
@@ -58,7 +64,7 @@ src/
 │   ├── EventEmitter.js      on() returns an unsubscribe fn
 │   ├── AudioEngine.js       AudioContext + <audio>; source → analyser → gain → destination
 │   ├── FeatureExtractor.js  realtime AnalysisSource: log bars, bands, beat (zero-alloc frame)
-│   ├── AnalysisClient.js    health check + decode-to-WAV upload + response decoding
+│   ├── AnalysisClient.js    health/analyze/library calls + decode-to-WAV upload + response decoding
 │   ├── PrecomputedAnalysisSource.js  server timeline lerped by audio currentTime
 │   └── VisualizerHost.js    the only canvas + rAF loop; setSource(); DPR resize; fullscreen
 ├── visualizers/
@@ -70,12 +76,14 @@ src/
     ├── DropZone.js           emits 'file'
     ├── TransportControls.js  emits intents: playToggle / seek / volume / …
     ├── TemplateGallery.js    cards from registry.list(); emits 'select'
-    └── StatusIndicator.js    busy spinner + analysis-mode badge (output-only)
+    ├── StatusIndicator.js    busy spinner + analysis-mode badge (output-only)
+    └── StartupModal.js       process-new / open-from-library modal (emits intents)
 
 server/
-├── app.py                    FastAPI: /health, /analyze (CORS, gzip, sha256 cache, ?ml=)
+├── app.py                    FastAPI: /health, /analyze, /library/* (CORS, gzip, sha256 cache, ?ml=)
 ├── analysis.py               pure librosa DSP + percentile normalization + stem tracks
 ├── stems.py                  Demucs v4 wrapper (lazy model load, temp-file IO)
+├── library.py                persistent track store (audio + analysis + scenes, atomic writes)
 └── requirements.txt
 ```
 
@@ -124,6 +132,8 @@ node .dev/shapes-check.mjs    # per-shape band isolation
 node .dev/precomputed.mjs     # spawns uvicorn; full server-analysis path incl. ML stems
 node .dev/fallback.mjs        # server down -> realtime fallback + badge
 node .dev/analyze-endpoint.mjs           # endpoint schema, ML, cache (server must be up)
+node .dev/library-endpoint.mjs           # library CRUD, audio Range, scenes (server must be up)
+node .dev/library-flow.mjs               # spawns uvicorn; process -> reopen-from-library flow
 server\.venv\Scripts\python .dev\analysis-direct.py   # unit check of analysis.py (DSP + ML)
 server\.venv\Scripts\python .dev\stems-smoke.py       # separation sanity on test.wav
 ```

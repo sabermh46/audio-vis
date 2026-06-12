@@ -35,7 +35,7 @@ await page.goto('http://localhost:8123/', { waitUntil: 'networkidle' });
 await page.waitForSelector('.av-transport');
 
 const t0 = Date.now();
-await page.setInputFiles('.av-dropzone input[type="file"]', path.join(OUT, 'test.wav'));
+await page.setInputFiles('.av-modal input[type="file"]', path.join(OUT, 'test.wav'));
 await page.waitForSelector('[data-action="play"]:not([disabled])', { timeout: 10000 });
 const elapsed = Date.now() - t0;
 

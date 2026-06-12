@@ -63,6 +63,9 @@ export class AnalysisClient {
     onPhase?.('uploading');
     const form = new FormData();
     form.append('file', wavBlob, 'upload.wav');
+    // The original file is stored in the library for faithful, compact
+    // playback (the WAV stays the analysis input).
+    form.append('original', file, file.name);
 
     let response;
     try {
@@ -84,6 +87,42 @@ export class AnalysisClient {
     }
 
     return this.#decode(await response.json());
+  }
+
+  /** @returns {Promise<Array>} library track metadata, newest first */
+  async listLibrary() {
+    const res = await fetch(`${this.#baseUrl}/library`);
+    if (!res.ok) throw new AnalysisError(`Library list failed: HTTP ${res.status}`, 'library');
+    return (await res.json()).tracks;
+  }
+
+  /** Fetches a previously-processed analysis — no re-analysis. */
+  async getLibraryAnalysis(id) {
+    const res = await fetch(`${this.#baseUrl}/library/${id}/analysis`);
+    if (!res.ok) throw new AnalysisError(`Library analysis failed: HTTP ${res.status}`, 'library');
+    const decoded = this.#decode(await res.json());
+    decoded.trackId = id;
+    return decoded;
+  }
+
+  /** Direct URL for a library track's audio (used as an <audio> src). */
+  libraryAudioUrl(id) {
+    return `${this.#baseUrl}/library/${id}/audio`;
+  }
+
+  async deleteLibraryEntry(id) {
+    const res = await fetch(`${this.#baseUrl}/library/${id}`, { method: 'DELETE' });
+    if (!res.ok) throw new AnalysisError(`Delete failed: HTTP ${res.status}`, 'library');
+  }
+
+  async renameLibraryEntry(id, name) {
+    const res = await fetch(`${this.#baseUrl}/library/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) throw new AnalysisError(`Rename failed: HTTP ${res.status}`, 'library');
+    return res.json();
   }
 
   #decode(json) {
@@ -114,6 +153,7 @@ export class AnalysisClient {
       beats: Float64Array.from(json.beats),
       beatsSource: json.beatsSource ?? 'mix',
       tempo: json.tempo,
+      trackId: json.trackId ?? null,
       ml: json.ml === true,
       mlModel: json.mlModel ?? null,
       stems: null,

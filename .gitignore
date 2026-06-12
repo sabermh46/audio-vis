@@ -4,4 +4,5 @@ node_modules/
 server/.venv/
 server/.models/
 server/.cache/
+server/library/
 __pycache__/

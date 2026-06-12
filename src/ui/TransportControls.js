@@ -24,6 +24,7 @@ export class TransportControls extends EventEmitter {
     this.#el = document.createElement('div');
     this.#el.className = 'av-transport';
     this.#el.innerHTML = `
+      <button class="av-btn-icon" data-action="library" title="Track library">🗂</button>
       <button class="av-btn-icon" data-action="openFile" title="Open audio file">📂</button>
       <button class="av-btn av-btn-play" data-action="play" title="Play / pause" disabled>▶</button>
       <span class="av-track-name" data-el="name">No track loaded</span>
@@ -50,6 +51,7 @@ export class TransportControls extends EventEmitter {
       this.#domListeners.push([target, event, handler]);
     };
 
+    listen(this.#el.querySelector('[data-action="library"]'), 'click', () => this.emit('openLibrary'));
     listen(this.#el.querySelector('[data-action="openFile"]'), 'click', () => this.emit('openFile'));
     listen(this.#playBtn, 'click', () => this.emit('playToggle'));
     listen(this.#galleryBtn, 'click', () => this.emit('toggleGallery'));

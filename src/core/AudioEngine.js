@@ -17,6 +17,7 @@ export class AudioEngine extends EventEmitter {
   #analyser = null;
   #gain = null;
   #objectUrl = null;
+  #hasSrc = false;
   #trackName = '';
   #mediaListeners = [];
 
@@ -60,7 +61,26 @@ export class AudioEngine extends EventEmitter {
     if (this.#objectUrl) URL.revokeObjectURL(this.#objectUrl);
     this.#objectUrl = URL.createObjectURL(file);
     this.#trackName = file.name;
+    this.#audio.crossOrigin = null; // same-origin object URL
     this.#audio.src = this.#objectUrl;
+    this.#hasSrc = true;
+  }
+
+  /**
+   * Loads audio from a URL (e.g. a library track served by the analysis
+   * server). crossOrigin is required so the MediaElementSource analyser tap
+   * stays CORS-clean — without it the source taints and frame.waveform goes
+   * flat (audio still plays).
+   */
+  loadUrl(url, { name = '' } = {}) {
+    if (this.#objectUrl) {
+      URL.revokeObjectURL(this.#objectUrl);
+      this.#objectUrl = null;
+    }
+    this.#trackName = name;
+    this.#audio.crossOrigin = 'anonymous';
+    this.#audio.src = url;
+    this.#hasSrc = true;
   }
 
   async play() {
@@ -92,7 +112,7 @@ export class AudioEngine extends EventEmitter {
   get currentTime() { return this.#audio?.currentTime ?? 0; }
   get duration() { return this.#audio?.duration ?? 0; }
   get isPlaying() { return !!this.#audio && !this.#audio.paused && !this.#audio.ended; }
-  get hasTrack() { return !!this.#objectUrl; }
+  get hasTrack() { return this.#hasSrc; }
   get trackName() { return this.#trackName; }
   get analyser() { return this.#analyser; }
 

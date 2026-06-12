@@ -39,6 +39,19 @@ except Exception as e:  # pragma: no cover - import-time environment issue
     Separator = None
     _import_error = e
 
+# CPU threads for separation. PyTorch already defaults to the physical core
+# count, which benchmarks fastest — forcing all *logical* cores (hyperthreads)
+# is measurably slower for Demucs's convolutions (CPU oversubscription). So we
+# only override when AUDIO_VIS_THREADS is explicitly set, for tuning on other
+# machines.
+_thread_override = os.environ.get("AUDIO_VIS_THREADS")
+if _thread_override:
+    try:
+        import torch
+        torch.set_num_threads(int(_thread_override))
+    except Exception:  # pragma: no cover
+        pass
+
 
 def availability() -> str:
     """'ready' (model loaded) | 'cold' (loadable, not yet loaded) | 'unavailable'."""

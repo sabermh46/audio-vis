@@ -54,7 +54,7 @@ try {
   await page.waitForSelector('.av-transport');
 
   // ML separation can take a while on first (uncached) upload.
-  await page.setInputFiles('.av-dropzone input[type="file"]', path.join(OUT, 'test.wav'));
+  await page.setInputFiles('.av-modal input[type="file"]', path.join(OUT, 'test.wav'));
   await page.waitForSelector('[data-action="play"]:not([disabled])', { timeout: 600000 });
 
   const mode = await page.evaluate(() => window.__app.mode);

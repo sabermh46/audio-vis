@@ -11,6 +11,7 @@ import { DropZone } from './ui/DropZone.js';
 import { TransportControls } from './ui/TransportControls.js';
 import { TemplateGallery } from './ui/TemplateGallery.js';
 import { StatusIndicator } from './ui/StatusIndicator.js';
+import { StartupModal } from './ui/StartupModal.js';
 
 const STORAGE_KEY = 'audio-vis:visualizer';
 const DEFAULT_VISUALIZER = 'bars';
@@ -34,11 +35,13 @@ export class App {
   #transport = null;
   #gallery = null;
   #status = null;
+  #modal = null;
   #root = null;
   #idleEl = null;
   #unsubscribers = [];
   #analysisAbort = null;
   #loadSeq = 0;
+  #libraryCache = [];
 
   init(container) {
     this.#root = document.createElement('div');
@@ -77,18 +80,53 @@ export class App {
     this.#gallery.attach(stage);
     this.#status = new StatusIndicator();
     this.#status.attach(stage);
+    this.#modal = new StartupModal();
+    this.#modal.attach(this.#root);
 
     this.#wire();
     this.#selectVisualizer(this.#restoreVisualizerId());
     this.audioEngine.setVolume(this.#transport.volume);
+    this.#showStartup();
+  }
+
+  async #showStartup() {
+    this.#modal.show();
+    const health = await this.analysisClient.getHealth();
+    this.#modal.setServerOnline(health.ok);
+    if (health.ok) await this.#refreshLibrary();
+  }
+
+  async #refreshLibrary() {
+    try {
+      this.#libraryCache = await this.analysisClient.listLibrary();
+      this.#modal.setLibrary(this.#libraryCache);
+    } catch {
+      this.#modal.setServerOnline(false);
+    }
   }
 
   #wire() {
     const sub = (unsubscribe) => this.#unsubscribers.push(unsubscribe);
 
+    // Startup / library modal intents
+    sub(this.#modal.on('processFile', (file) => this.#loadFile(file)));
+    sub(this.#modal.on('openLibrary', (id) => this.#loadFromLibrary(id)));
+    sub(this.#modal.on('deleteLibrary', async (id) => {
+      try { await this.analysisClient.deleteLibraryEntry(id); } catch { /* ignore */ }
+      await this.#refreshLibrary();
+    }));
+    sub(this.#modal.on('renameLibrary', async ({ id, name }) => {
+      try { await this.analysisClient.renameLibraryEntry(id, name); } catch { /* ignore */ }
+      await this.#refreshLibrary();
+    }));
+    sub(this.#modal.on('close', () => {
+      if (this.audioEngine.hasTrack) this.#modal.hide();
+    }));
+
     // UI intents -> core
     sub(this.#dropZone.on('file', (file) => this.#loadFile(file)));
     sub(this.#transport.on('openFile', () => this.#dropZone.openPicker()));
+    sub(this.#transport.on('openLibrary', () => { this.#refreshLibrary(); this.#modal.show(); }));
     sub(this.#transport.on('playToggle', () => this.audioEngine.toggle()));
     sub(this.#transport.on('seek', (seconds) => this.audioEngine.seek(seconds)));
     sub(this.#transport.on('volume', (value) => this.audioEngine.setVolume(value)));
@@ -116,6 +154,10 @@ export class App {
       this.#idleEl.classList.remove('hidden');
       this.#idleEl.querySelector('.hint').textContent = message;
       this.#dropZone.setClickThrough(false);
+      // A library audio URL that 404s (e.g. server went offline) lands here —
+      // reopen the modal so the user can pick again.
+      this.#modal.setServerOnline(false);
+      this.#modal.show();
     }));
 
     // Per-frame: drive the 60fps time display from the render loop
@@ -182,7 +224,46 @@ export class App {
     this.mode = usePrecomputed ? 'precomputed' : 'realtime';
     this.#status.setMode(this.mode, { ml: mlUsed });
     this.#status.setBusy(null);
+    this.#modal.hide();
     this.audioEngine.loadFile(file);
+    // A processed track is now in the server library — refresh the list.
+    if (usePrecomputed) this.#refreshLibrary();
+  }
+
+  /**
+   * Instant load of a previously-processed track from the library — no
+   * re-analysis. On fetch failure stay in the modal and flag the server
+   * offline (the audio URL would 404 too).
+   */
+  async #loadFromLibrary(id) {
+    const seq = ++this.#loadSeq;
+    this.#analysisAbort?.abort();
+    this.#status.setMode(null);
+    this.#status.setBusy('Loading from library…');
+
+    let analysis;
+    try {
+      analysis = await this.analysisClient.getLibraryAnalysis(id);
+    } catch {
+      this.#status.setBusy(null);
+      this.#modal.setServerOnline(false);
+      return;
+    }
+    if (seq !== this.#loadSeq) return;
+
+    this.lastAnalysis = analysis;
+    this.precomputedSource = new PrecomputedAnalysisSource(analysis, {
+      getTime: () => this.audioEngine.currentTime,
+      analyser: this.audioEngine.analyser,
+    });
+    this.host.setSource(this.precomputedSource);
+    this.mode = 'precomputed';
+    this.#status.setMode('precomputed', { ml: analysis.ml });
+    this.#status.setBusy(null);
+    this.#modal.hide();
+
+    const meta = this.#libraryCache.find((t) => t.id === id);
+    this.audioEngine.loadUrl(this.analysisClient.libraryAudioUrl(id), { name: meta?.name ?? '' });
   }
 
   #selectVisualizer(id) {
@@ -206,6 +287,7 @@ export class App {
     this.#gallery.destroy();
     this.#transport.destroy();
     this.#dropZone.destroy();
+    this.#modal.destroy();
     this.audioEngine.destroy();
     this.#root?.remove();
   }

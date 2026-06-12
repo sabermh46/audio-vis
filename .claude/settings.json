@@ -24,7 +24,10 @@
       "Bash(timeout 60 bash -c 'until curl -sf http://127.0.0.1:8765/health | grep -q ml; do sleep 1; done')",
       "Bash(curl -s http://127.0.0.1:8765/health)",
       "Bash(git add *)",
-      "Bash(git commit -q -m ' *)"
+      "Bash(git commit -q -m ' *)",
+      "Bash(server/.venv/Scripts/python -m uvicorn app:app --app-dir server --port 8765)",
+      "Bash(.venv/Scripts/python -c \"import app; print\\('app imports OK'\\)\")",
+      "Bash(node .dev/library-endpoint.mjs)"
     ]
   }
 }

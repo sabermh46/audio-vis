@@ -30,7 +30,7 @@ await page.goto('http://localhost:8123/', { waitUntil: 'networkidle' });
 await page.waitForSelector('.av-transport');
 
 // Load the file through the real hidden input.
-await page.setInputFiles('.av-dropzone input[type="file"]', WAV);
+await page.setInputFiles('.av-modal input[type="file"]', WAV);
 await page.waitForSelector('[data-action="play"]:not([disabled])', { timeout: 5000 });
 check('track loaded (play enabled)', true);
 
@@ -39,17 +39,21 @@ check('track name shown', trackName === 'test.wav', trackName);
 
 // Should be auto-playing; give the bass section a moment.
 await page.waitForTimeout(1500);
-const snapshot = () => ({
-  playing: window.__app.audioEngine.isPlaying,
-  time: window.__app.audioEngine.currentTime,
-  bands: { ...window.__app.extractor.frame.bands },
-  peakBar: (() => {
-    const bars = window.__app.extractor.frame.bars;
-    let idx = 0;
-    for (let i = 1; i < bars.length; i++) if (bars[i] > bars[idx]) idx = i;
-    return { idx, value: bars[idx], count: bars.length };
-  })(),
-});
+const snapshot = () => {
+  // Read whichever analysis source is active (precomputed if the server is
+  // up, else the realtime extractor) — both expose the same frame shape.
+  const src = window.__app.mode === 'precomputed'
+    ? window.__app.precomputedSource : window.__app.extractor;
+  const bars = src.frame.bars;
+  let idx = 0;
+  for (let i = 1; i < bars.length; i++) if (bars[i] > bars[idx]) idx = i;
+  return {
+    playing: window.__app.audioEngine.isPlaying,
+    time: window.__app.audioEngine.currentTime,
+    bands: { ...src.frame.bands },
+    peakBar: { idx, value: bars[idx], count: bars.length },
+  };
+};
 const state1 = await page.evaluate(snapshot);
 check('audio is playing', state1.playing);
 check('time advancing', state1.time > 0.5, `t=${state1.time.toFixed(2)}`);
@@ -59,8 +63,10 @@ check('time advancing', state1.time > 0.5, `t=${state1.time.toFixed(2)}`);
 check('bass band dominates during 60Hz tone',
   state1.bands.bass > 0.1 && state1.bands.bass > state1.bands.treble * 5,
   `bass=${state1.bands.bass.toFixed(3)} mid=${state1.bands.mid.toFixed(3)} treble=${state1.bands.treble.toFixed(3)}`);
+// Bar binning differs by source (realtime log-bins vs precomputed 64-mel),
+// so assert the peak is in the lower third, not an exact index.
 check('peak bar in bass region with strong level',
-  state1.peakBar.idx >= 5 && state1.peakBar.idx <= 16 && state1.peakBar.value > 0.5,
+  state1.peakBar.idx < state1.peakBar.count / 3 && state1.peakBar.value > 0.5,
   `bar ${state1.peakBar.idx}/${state1.peakBar.count} v=${state1.peakBar.value.toFixed(2)}`);
 
 // Canvas actually has pixels drawn?
@@ -80,9 +86,8 @@ await page.evaluate(() => window.__app.audioEngine.seek(4.2));
 await page.waitForTimeout(1200);
 const state2 = await page.evaluate(snapshot);
 check('seek worked', state2.time > 4 && state2.time < 6, `t=${state2.time.toFixed(2)}`);
-// Expected bar for 8kHz: 64 * ln(8000/20)/ln(1000) ≈ bar 55.
 check('peak bar in treble region during 8kHz tone',
-  state2.peakBar.idx >= 50 && state2.peakBar.idx <= 60 && state2.peakBar.value > 0.5,
+  state2.peakBar.idx > state2.peakBar.count / 2 && state2.peakBar.value > 0.5,
   `bar ${state2.peakBar.idx}/${state2.peakBar.count} v=${state2.peakBar.value.toFixed(2)}`);
 check('bass band quiet during 8kHz tone', state2.bands.bass < 0.05,
   `bass=${state2.bands.bass.toFixed(3)} treble=${state2.bands.treble.toFixed(3)}`);
@@ -98,7 +103,7 @@ check('button shows play icon when paused', playIcon.trim() === '▶', playIcon.
 
 // Load a second file — proves the once-per-element MediaElementSource holds.
 // (The async load flow waits up to 1.2s for the analysis-server health check.)
-await page.setInputFiles('.av-dropzone input[type="file"]', WAV);
+await page.setInputFiles('.av-modal input[type="file"]', WAV);
 await page.waitForTimeout(2600);
 const reloaded = await page.evaluate(() => ({
   time: window.__app.audioEngine.currentTime,

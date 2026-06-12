@@ -17,17 +17,24 @@ page.on('pageerror', (err) => errors.push(String(err)));
 
 await page.goto('http://localhost:8123/', { waitUntil: 'networkidle' });
 await page.waitForSelector('.av-transport');
-await page.screenshot({ path: path.join(OUT, '1-idle.png') });
 
-// Idle hint visible?
-const hint = await page.textContent('.av-idle .hint');
-console.log('idle hint:', JSON.stringify(hint));
+// Startup modal should appear on load.
+const modalOpen = await page.$eval('.av-modal-backdrop', (el) => el.classList.contains('open'));
+console.log('startup modal open:', modalOpen);
+await page.screenshot({ path: path.join(OUT, '0-modal.png') });
 
 // Transport controls present?
-for (const sel of ['[data-action="play"]', '.av-seek', '.av-volume', '[data-action="gallery"]', '[data-action="fullscreen"]', '[data-action="openFile"]']) {
+for (const sel of ['[data-action="play"]', '.av-seek', '.av-volume', '[data-action="gallery"]', '[data-action="fullscreen"]', '[data-action="openFile"]', '[data-action="library"]']) {
   const found = !!(await page.$(sel));
   console.log(`control ${sel}: ${found ? 'OK' : 'MISSING'}`);
 }
+
+// Load a track through the modal (realtime mode is fine if no server) to
+// dismiss the modal, then exercise the gallery.
+await page.setInputFiles('.av-modal input[type="file"]', path.join(OUT, 'test.wav'));
+await page.waitForSelector('[data-action="play"]:not([disabled])', { timeout: 600000 });
+await page.waitForSelector('.av-modal-backdrop:not(.open)');
+await page.screenshot({ path: path.join(OUT, '1-loaded.png') });
 
 // Open the template gallery.
 await page.click('[data-action="gallery"]');
