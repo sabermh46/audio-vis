@@ -49,7 +49,19 @@ def _band_bins(low_hz: float, high_hz: float, n_bins: int) -> slice:
     return slice(lo, max(lo, hi) + 1)
 
 
-def analyze(y: np.ndarray, sr: int) -> dict:
+def _stem_tracks(stems: dict) -> dict:
+    """Per-stem RMS energy timeline on the same fps grid, normalized."""
+    tracks = {}
+    for name, data in stems.items():
+        rms = librosa.feature.rms(y=data, frame_length=N_FFT, hop_length=HOP)[0]
+        tracks[name] = _normalize_db(librosa.amplitude_to_db(rms, ref=np.max(rms) or 1.0))
+    return tracks
+
+
+def analyze(y: np.ndarray, sr: int, stems: dict | None = None) -> dict:
+    """Full feature timeline. `stems` (from stems.separate) is optional —
+    when present the response gains per-stem tracks and beats/tempo are
+    re-derived from the drums stem (far more accurate than the mix)."""
     if y.ndim > 1:
         y = np.mean(y, axis=1)
     if sr != SR:
@@ -86,11 +98,24 @@ def analyze(y: np.ndarray, sr: int) -> dict:
         librosa.power_to_db((p_mag ** 2).mean(axis=0), ref=np.max)
     )
 
-    # Onset strength + beats + tempo.
+    # Onset strength + beats + tempo. With a drums stem available, beat
+    # tracking runs on it instead of the mix — vocals/synths can't confuse it.
     onset_env = librosa.onset.onset_strength(S=mel_db, sr=sr, hop_length=HOP)
     onset = np.clip(onset_env / max(np.percentile(onset_env, 95), 1e-6), 0.0, 1.0)
+
+    beats_source = "mix"
+    beat_env = onset_env
+    drums_onset = None
+    if stems and "drums" in stems:
+        drums_env = librosa.onset.onset_strength(y=stems["drums"], sr=sr, hop_length=HOP)
+        drums_onset = np.clip(
+            drums_env / max(np.percentile(drums_env, 95), 1e-6), 0.0, 1.0
+        )
+        if drums_env.max() > 0:
+            beat_env = drums_env
+            beats_source = "drums"
     tempo, beat_times = librosa.beat.beat_track(
-        onset_envelope=onset_env, sr=sr, hop_length=HOP, units="time"
+        onset_envelope=beat_env, sr=sr, hop_length=HOP, units="time"
     )
     tempo = float(np.atleast_1d(tempo)[0])
 
@@ -100,11 +125,18 @@ def analyze(y: np.ndarray, sr: int) -> dict:
         )
     )
 
-    # Onset env can run ±1 frame vs the spectrograms — trim everything.
-    n = min(bars.shape[1], *(b.shape[0] for b in bands.values()),
-            harmonic.shape[0], percussive.shape[0], onset.shape[0], rms.shape[0])
+    stem_tracks = _stem_tracks(stems) if stems else None
 
-    return {
+    # Onset env can run ±1 frame vs the spectrograms — trim everything.
+    lengths = [bars.shape[1], *(b.shape[0] for b in bands.values()),
+               harmonic.shape[0], percussive.shape[0], onset.shape[0], rms.shape[0]]
+    if stem_tracks:
+        lengths += [t.shape[0] for t in stem_tracks.values()]
+    if drums_onset is not None:
+        lengths.append(drums_onset.shape[0])
+    n = min(lengths)
+
+    result = {
         "version": 1,
         "duration": round(duration, 4),
         "fps": fps,
@@ -118,5 +150,13 @@ def analyze(y: np.ndarray, sr: int) -> dict:
         "onset": _to_u8b64(onset[:n]),
         "rms": _to_u8b64(rms[:n]),
         "beats": [round(float(t), 4) for t in beat_times if t <= duration],
+        "beatsSource": beats_source,
         "tempo": round(tempo, 2),
+        "ml": stem_tracks is not None,
     }
+    if stem_tracks:
+        result["mlModel"] = "htdemucs"
+        result["stems"] = {name: _to_u8b64(t[:n]) for name, t in stem_tracks.items()}
+        if drums_onset is not None:
+            result["stemsOnset"] = {"drums": _to_u8b64(drums_onset[:n])}
+    return result

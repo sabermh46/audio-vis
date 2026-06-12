@@ -2,4 +2,6 @@
 .dev/test.wav
 node_modules/
 server/.venv/
+server/.models/
+server/.cache/
 __pycache__/

@@ -27,13 +27,20 @@ export class AnalysisClient {
 
   /** Quick health probe; false on any failure (server down, CORS, timeout). */
   async isAvailable(timeoutMs = 1200) {
+    return (await this.getHealth(timeoutMs)).ok;
+  }
+
+  /** @returns {{ok: boolean, ml: 'ready'|'cold'|'unavailable'|null}} */
+  async getHealth(timeoutMs = 1200) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch(`${this.#baseUrl}/health`, { signal: controller.signal });
-      return res.ok;
+      if (!res.ok) return { ok: false, ml: null };
+      const body = await res.json();
+      return { ok: true, ml: body.ml ?? null };
     } catch {
-      return false;
+      return { ok: false, ml: null };
     } finally {
       clearTimeout(timer);
     }
@@ -89,7 +96,7 @@ export class AnalysisClient {
       for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
       return out;
     };
-    return {
+    const decoded = {
       duration: json.duration,
       fps: json.fps,
       frames: json.frames,
@@ -105,7 +112,24 @@ export class AnalysisClient {
       onset: b64ToU8(json.onset),
       rms: b64ToU8(json.rms),
       beats: Float64Array.from(json.beats),
+      beatsSource: json.beatsSource ?? 'mix',
       tempo: json.tempo,
+      ml: json.ml === true,
+      mlModel: json.mlModel ?? null,
+      stems: null,
+      stemsOnset: null,
     };
+    if (json.stems) {
+      decoded.stems = {
+        vocals: b64ToU8(json.stems.vocals),
+        drums: b64ToU8(json.stems.drums),
+        bass: b64ToU8(json.stems.bass),
+        other: b64ToU8(json.stems.other),
+      };
+      if (json.stemsOnset?.drums) {
+        decoded.stemsOnset = { drums: b64ToU8(json.stemsOnset.drums) };
+      }
+    }
+    return decoded;
   }
 }

@@ -60,6 +60,10 @@ const playing = await page.evaluate(() => ({
 }));
 check('audio playing in fallback', playing.playing && playing.time > 0.5, `t=${playing.time.toFixed(2)}`);
 check('realtime analysis active', playing.bass > 0.5, `bass=${playing.bass.toFixed(2)}`);
+const stems = await page.evaluate(() => ({ ...window.__app.extractor.frame.stems }));
+check('frame.stems present in realtime mode (proxies)',
+  ['vocals', 'drums', 'bass', 'other'].every((k) => typeof stems[k] === 'number') && stems.bass > 0.5,
+  JSON.stringify(Object.fromEntries(Object.entries(stems).map(([k, v]) => [k, +v.toFixed(2)]))));
 await page.screenshot({ path: path.join(OUT, '11-fallback.png') });
 
 await browser.close();

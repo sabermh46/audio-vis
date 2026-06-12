@@ -31,6 +31,8 @@ export class Visualizer {
    *   harmonic: number         0..1 melodic/vocal energy (≈ bands.mid in realtime mode)
    *   percussive: number       0..1 drum energy (= onset in realtime mode)
    *   tempo: number            BPM from offline analysis; 0 in realtime mode
+   *   stems: {vocals,drums,bass,other}  0..1 per-instrument energy — true ML
+   *     stem separation when the server analyzed with ML, DSP proxies otherwise
    * @param {number} dt - seconds since last frame
    * @param {{width: number, height: number}} size - CSS pixel dimensions
    */

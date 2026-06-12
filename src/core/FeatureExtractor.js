@@ -76,6 +76,7 @@ export class FeatureExtractor {
     harmonic: 0,
     percussive: 0,
     tempo: 0,
+    stems: { vocals: 0, drums: 0, bass: 0, other: 0 },
   };
 
   constructor(analyser, { numBars = 64, fMin = 20, fMax = 20000 } = {}) {
@@ -208,9 +209,20 @@ export class FeatureExtractor {
     const [onset, fluxEnv] = this.#normalize(flux, this.#fluxEnvMax, dt, FLUX_TAU, FLUX_FLOOR, 0);
     this.#fluxEnvMax = fluxEnv;
     this.frame.onset = onset;
-    this.frame.percussive = onset;
+    // Percussive display value: flux spikes last a frame or two, so hold
+    // hits with a fast-attack/slow-release envelope (drums shape shouldn't
+    // strobe to zero between hits).
+    const percRate = onset > this.frame.percussive ? 0.6 : 0.06;
+    this.frame.percussive += (onset - this.frame.percussive) * percRate;
     this.frame.harmonic = bands.mid;
     this.frame.tempo = 0;
+    // No ML here — fill stems with the closest realtime proxies so
+    // visualizers can rely on frame.stems existing in every mode.
+    const { stems } = this.frame;
+    stems.vocals = this.frame.harmonic;
+    stems.drums = this.frame.percussive;
+    stems.bass = bands.bass;
+    stems.other = bands.mid;
 
     this.frame.beat = this.#detectBeat(this.#bassRawUnnormalized, nowMs);
   }

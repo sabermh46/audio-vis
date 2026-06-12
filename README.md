@@ -22,12 +22,21 @@ server\.venv\Scripts\python -m uvicorn app:app --app-dir server --port 8765
 
 The app auto-detects the server. If it's not running, everything still works in realtime mode. (If `pip install` fails on a brand-new Python release — numba/llvmlite wheels lag — create the venv with Python 3.12/3.13.)
 
+**ML stem separation** also requires the `ffmpeg` binary (`winget install Gyan.FFmpeg`, then copy `ffmpeg.exe` into `server\.venv\Scripts\` or restart your shell). Notes:
+
+- First analysis downloads the Demucs model (~81 MB) into `server/.models/` and loads it (~1 min); after that, separation takes roughly the length of the song on CPU.
+- Results are cached by content hash in `server/.cache/` — re-loading the same track is instant.
+- If separation fails or the track is longer than 12 minutes, the server transparently returns the DSP-only analysis (`ml: false`).
+- `POST /analyze?ml=0` skips ML entirely (used by fast tests).
+- With `--reload` during development, watchfiles may choke on the venv; prefer running without it and restarting manually.
+
 ## Two analysis modes
 
 Music has a ~1/f spectral tilt: on a shared dB scale, bass always reads near max and visuals become bass-dominated. The fix is normalization — and how good it can be depends on when analysis happens:
 
-- **Precomputed (server on)**: on file drop the browser decodes the audio to mono WAV, uploads it, and FastAPI + librosa analyze the whole track: 64-band mel spectrogram, bass/mid/treble energies, onset strength, beat times + tempo, and harmonic-vs-percussive separation (HPSS — drums vs melodic/vocal content). Every track is normalized against **its own whole-track 5th–95th percentiles**, so each band/bar moves through its full range. The browser then plays the file and reads the timeline by `currentTime` (lerped between 43 fps analysis frames).
-- **Realtime (fallback)**: the native AnalyserNode path with adaptive per-band/per-bar rolling-max normalization (instant attack, ~5 s decay). Good balance, but it can only know the past, not the whole track, and beats/tempo/HPSS are approximations. An amber "Realtime mode" badge shows when active.
+- **Precomputed (server on)**: on file drop the browser decodes the audio to mono WAV, uploads it, and FastAPI + librosa analyze the whole track: 64-band mel spectrogram, bass/mid/treble energies, onset strength, beat times + tempo, and harmonic-vs-percussive separation (HPSS). Every track is normalized against **its own whole-track 5th–95th percentiles**, so each band/bar moves through its full range. The browser then plays the file and reads the timeline by `currentTime` (lerped between 43 fps analysis frames).
+- **+ ML stems**: the server additionally runs **Demucs v4 (htdemucs)** source separation into real instrument stems — `vocals / drums / bass / other` — exposed as per-stem energy timelines (`frame.stems`), and **beat tracking runs on the isolated drums stem** (vocals and synths can't confuse it). This is what frequency analysis fundamentally can't do: a kick drum and a bass guitar both live at 60–100 Hz; only separation tells them apart.
+- **Realtime (fallback)**: the native AnalyserNode path with adaptive per-band/per-bar rolling-max normalization (instant attack, ~5 s decay). `frame.stems` falls back to DSP proxies. An amber "Realtime mode" badge shows when active.
 
 ## Features
 
@@ -35,7 +44,8 @@ Music has a ~1/f spectral tilt: on a shared dB scale, bass always reads near max
 - **Logarithmic frequency binning** — 64 bars spaced by octave, matching human pitch perception
 - **Band separation** — bass (20–250 Hz), mid/vocal (250 Hz–4 kHz), treble (4–20 kHz), each normalized to its own dynamics
 - **Beats, tempo, onsets, harmonic/percussive split** — exact from the server, approximated in realtime mode
-- **Visualizer templates** — a gallery (🎨) to switch visualizers live; ships with Frequency Bars, Waveform, and Band Shapes
+- **ML stem separation** — true vocals/drums/bass/other isolation (Demucs v4), drums-derived beat tracking, per-track caching
+- **Visualizer templates** — a gallery (🎨) to switch visualizers live; ships with Frequency Bars, Waveform, and Stem Shapes
 - Fullscreen, DPR-sharp canvas, dark UI
 
 ## Architecture
@@ -63,8 +73,9 @@ src/
     └── StatusIndicator.js    busy spinner + analysis-mode badge (output-only)
 
 server/
-├── app.py                    FastAPI: /health, /analyze (CORS, gzip)
-├── analysis.py               pure librosa DSP + percentile normalization
+├── app.py                    FastAPI: /health, /analyze (CORS, gzip, sha256 cache, ?ml=)
+├── analysis.py               pure librosa DSP + percentile normalization + stem tracks
+├── stems.py                  Demucs v4 wrapper (lazy model load, temp-file IO)
 └── requirements.txt
 ```
 
@@ -110,7 +121,9 @@ node .dev/make-test-wav.mjs   # generate the test signal (60Hz / 8kHz / 120BPM c
 node .dev/smoke.mjs           # UI shell, gallery, persistence
 node .dev/playback.mjs        # playback, band separation, seek, teardown (realtime mode)
 node .dev/shapes-check.mjs    # per-shape band isolation
-node .dev/precomputed.mjs     # spawns uvicorn; full server-analysis path
+node .dev/precomputed.mjs     # spawns uvicorn; full server-analysis path incl. ML stems
 node .dev/fallback.mjs        # server down -> realtime fallback + badge
-server\.venv\Scripts\python .dev\analysis-direct.py   # unit check of analysis.py
+node .dev/analyze-endpoint.mjs           # endpoint schema, ML, cache (server must be up)
+server\.venv\Scripts\python .dev\analysis-direct.py   # unit check of analysis.py (DSP + ML)
+server\.venv\Scripts\python .dev\stems-smoke.py       # separation sanity on test.wav
 ```

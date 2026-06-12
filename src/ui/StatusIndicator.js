@@ -28,11 +28,11 @@ export class StatusIndicator {
    * 'precomputed' shows a brief auto-hiding confirmation; 'realtime' shows
    * a persistent fallback badge; null clears.
    */
-  setMode(mode) {
+  setMode(mode, { ml = false } = {}) {
     clearTimeout(this.#hideTimer);
     this.#badgeEl.classList.remove('visible', 'realtime');
     if (mode === 'precomputed') {
-      this.#badgeEl.textContent = '✓ Full analysis';
+      this.#badgeEl.textContent = ml ? '✓ Full analysis + stems' : '✓ Full analysis';
       this.#badgeEl.classList.add('visible');
       this.#hideTimer = setTimeout(() => this.#badgeEl.classList.remove('visible'), 3000);
     } else if (mode === 'realtime') {

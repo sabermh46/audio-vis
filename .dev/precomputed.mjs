@@ -53,14 +53,43 @@ try {
   await page.goto('http://localhost:8123/', { waitUntil: 'networkidle' });
   await page.waitForSelector('.av-transport');
 
+  // ML separation can take a while on first (uncached) upload.
   await page.setInputFiles('.av-dropzone input[type="file"]', path.join(OUT, 'test.wav'));
-  await page.waitForSelector('[data-action="play"]:not([disabled])', { timeout: 30000 });
+  await page.waitForSelector('[data-action="play"]:not([disabled])', { timeout: 600000 });
 
   const mode = await page.evaluate(() => window.__app.mode);
   check('mode is precomputed', mode === 'precomputed', mode);
 
   const tempo = await page.evaluate(() => window.__app.precomputedSource?.frame.tempo);
   check('tempo present in frame', tempo > 100 && tempo < 140, String(tempo));
+
+  const mlInfo = await page.evaluate(() => ({
+    ml: window.__app.lastAnalysis?.ml,
+    beatsSource: window.__app.lastAnalysis?.beatsSource,
+    hasStems: !!window.__app.lastAnalysis?.stems,
+  }));
+  check('ML stems in analysis', mlInfo.ml === true && mlInfo.hasStems, JSON.stringify(mlInfo));
+  check('beats derived from drums stem', mlInfo.beatsSource === 'drums', mlInfo.beatsSource);
+
+  // Drums stem must spike in the click segment, stay low during the tones.
+  // Drum energy is spiky — track the max over a window, not one instant.
+  const maxDrums = async (ms = 1400) => page.evaluate(async (windowMs) => {
+    let max = 0;
+    const t0 = performance.now();
+    while (performance.now() - t0 < windowMs) {
+      max = Math.max(max, window.__app.precomputedSource.frame.stems.drums);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return max;
+  }, ms);
+  await page.evaluate(() => window.__app.audioEngine.seek(6.4));
+  await page.waitForTimeout(300);
+  const drumsClicks = await maxDrums();
+  await page.evaluate(() => window.__app.audioEngine.seek(0.8));
+  await page.waitForTimeout(300);
+  const drumsTone = await maxDrums();
+  check('drums stem hot on clicks, quiet on 60Hz tone', drumsClicks > 0.5 && drumsTone < drumsClicks * 0.7,
+    `clicks=${drumsClicks.toFixed(2)} tone=${drumsTone.toFixed(2)}`);
 
   // Seek into the 8kHz segment: treble band should read strong & balanced.
   await page.evaluate(() => window.__app.audioEngine.seek(4.0));

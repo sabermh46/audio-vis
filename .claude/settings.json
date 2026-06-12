@@ -9,7 +9,22 @@
       "Bash(netstat -ano)",
       "Bash(awk '{print $5}')",
       "Bash(node .dev/smoke.mjs)",
-      "Bash(node .dev/shapes-check.mjs)"
+      "Bash(node .dev/shapes-check.mjs)",
+      "Bash(ffmpeg -version)",
+      "Bash(winget install *)",
+      "Bash(server/.venv/Scripts/pip install *)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(server/.venv/Scripts/python -c \"import audio_separator; print\\('audio_separator', audio_separator.__version__ if hasattr\\(audio_separator,'__version__'\\) else 'ok'\\); import torch; print\\('torch', torch.__version__\\); import numpy; print\\('numpy', numpy.__version__\\)\")",
+      "Bash(server/.venv/Scripts/python .dev/analysis-direct.py)",
+      "Bash(server/.venv/Scripts/python .dev/stems-smoke.py)",
+      "Bash(server/.venv/Scripts/python -c \"from fastapi.responses import JSONResponse; import app; print\\('app imports OK'\\)\")",
+      "Bash(.venv/Scripts/python -c \"from fastapi.responses import JSONResponse; import app; print\\('app imports OK'\\)\")",
+      "Bash(curl -sf http://127.0.0.1:8765/health)",
+      "Bash(node .dev/analyze-endpoint.mjs)",
+      "Bash(timeout 60 bash -c 'until curl -sf http://127.0.0.1:8765/health | grep -q ml; do sleep 1; done')",
+      "Bash(curl -s http://127.0.0.1:8765/health)",
+      "Bash(git add *)",
+      "Bash(git commit -q -m ' *)"
     ]
   }
 }

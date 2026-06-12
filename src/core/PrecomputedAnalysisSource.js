@@ -2,6 +2,10 @@
 // at 60fps rendering without softening transients much.
 const BAND_ATTACK = 0.65;
 const BAND_RELEASE = 0.25;
+// Stems get a slower release: drum hits are sparse spikes and the shapes
+// look better holding for a beat than strobing to zero between hits.
+const STEM_ATTACK = 0.65;
+const STEM_RELEASE = 0.1;
 
 /**
  * AnalysisSource backed by a precomputed server timeline. Every rAF tick it
@@ -29,6 +33,7 @@ export class PrecomputedAnalysisSource {
     harmonic: 0,
     percussive: 0,
     tempo: 0,
+    stems: { vocals: 0, drums: 0, bass: 0, other: 0 },
   };
 
   /**
@@ -82,6 +87,23 @@ export class PrecomputedAnalysisSource {
     this.frame.harmonic = this.#track(this.#analysis.harmonic, i, frac);
     this.frame.percussive = this.#track(this.#analysis.percussive, i, frac);
     this.frame.volume = this.#track(this.#analysis.rms, i, frac);
+
+    // Real ML stem energies when present; otherwise the best DSP proxies.
+    const stemTracks = this.#analysis.stems;
+    for (const name of ['vocals', 'drums', 'bass', 'other']) {
+      let raw;
+      if (stemTracks) {
+        raw = this.#track(stemTracks[name], i, frac);
+      } else {
+        raw = name === 'vocals' ? this.frame.harmonic
+          : name === 'drums' ? this.frame.percussive
+          : name === 'bass' ? this.frame.bandsRaw.bass
+          : this.frame.bandsRaw.mid;
+      }
+      const current = this.frame.stems[name];
+      const rate = raw > current ? STEM_ATTACK : STEM_RELEASE;
+      this.frame.stems[name] = current + (raw - current) * rate;
+    }
 
     // Beat: fired iff a beat timestamp was crossed in (lastTime, t].
     if (t < this.#lastTime - 0.05) {

@@ -139,12 +139,20 @@ export class App {
     this.#status.setBusy('Checking analysis server…');
 
     let usePrecomputed = false;
-    if (await this.analysisClient.isAvailable()) {
+    let mlUsed = false;
+    const health = await this.analysisClient.getHealth();
+    if (health.ok) {
       try {
+        const analyzingText =
+          health.ml === 'cold'
+            ? 'Separating stems — first run loads the model, this can take a few minutes…'
+            : health.ml === 'ready'
+              ? 'Separating stems… (about the length of the song, cached afterwards)'
+              : 'Analyzing audio…';
         const phaseText = {
           decoding: 'Decoding audio…',
           uploading: 'Uploading…',
-          analyzing: 'Analyzing audio…',
+          analyzing: analyzingText,
         };
         const analysis = await this.analysisClient.analyze(file, {
           onPhase: (phase) => this.#status.setBusy(phaseText[phase]),
@@ -158,6 +166,7 @@ export class App {
         });
         this.host.setSource(this.precomputedSource);
         usePrecomputed = true;
+        mlUsed = analysis.ml;
       } catch (e) {
         if (seq !== this.#loadSeq) return;
         // Don't let silent fallback mask real bugs (CORS, server errors).
@@ -171,7 +180,7 @@ export class App {
       this.host.setSource(this.extractor);
     }
     this.mode = usePrecomputed ? 'precomputed' : 'realtime';
-    this.#status.setMode(this.mode);
+    this.#status.setMode(this.mode, { ml: mlUsed });
     this.#status.setBusy(null);
     this.audioEngine.loadFile(file);
   }

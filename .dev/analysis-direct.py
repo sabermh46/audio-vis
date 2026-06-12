@@ -40,4 +40,32 @@ assert abs(r["frames"] - r["duration"] * r["fps"]) < 3
 assert seg(bands["treble"], 3.2, 5.8) > 0.6 > seg(bands["treble"], 0.2, 2.8)
 assert seg(bands["bass"], 0.2, 2.8) > 0.6 > seg(bands["bass"], 3.2, 5.8)
 assert len(clicks_beats) >= 4
-print("DIRECT ANALYSIS CHECKS PASSED")
+assert r["ml"] is False and r["beatsSource"] == "mix" and "stems" not in r
+print("DIRECT ANALYSIS CHECKS PASSED (DSP)")
+
+# --- ML path: same analysis with real stems ---
+from stems import separate
+
+r2 = analyze(y, sr, stems=separate(y, sr))
+assert r2["ml"] is True and r2["mlModel"] == "htdemucs"
+assert r2["beatsSource"] == "drums"
+assert set(r2["stems"]) == {"vocals", "drums", "bass", "other"}
+stems_dec = {k: np.frombuffer(base64.b64decode(v), dtype=np.uint8) for k, v in r2["stems"].items()}
+assert all(len(t) == r2["frames"] for t in stems_dec.values())
+# Note: htdemucs leaks the synthetic 8kHz pure tone partly into drums
+# (unnatural signal), so compare clicks against the 60Hz segment and assert
+# the click bursts hit full scale — robust against that degeneracy.
+drums_clicks = seg(stems_dec["drums"], 6.2, 9.8)
+drums_60 = seg(stems_dec["drums"], 0.2, 2.8)
+fps = r2["fps"]
+drums_click_peak = stems_dec["drums"][int(6.0 * fps):int(10.0 * fps)].max() / 255
+print(f"drums stem: 60Hz {drums_60:.2f} | clicks {drums_clicks:.2f} | click peak {drums_click_peak:.2f}")
+assert drums_clicks > drums_60, "drums stem should beat its 60Hz leak"
+assert drums_click_peak > 0.9, "click bursts should hit near full scale in drums stem"
+bass_60 = seg(stems_dec["bass"], 0.2, 2.8)
+assert bass_60 > 0.5, f"bass stem should be hot during 60Hz tone ({bass_60:.2f})"
+ml_click_beats = [b for b in r2["beats"] if 6.0 <= b <= 10.0]
+print("tempo (drums-derived):", r2["tempo"], "| beats in click segment:", len(ml_click_beats))
+assert len(ml_click_beats) >= 4
+assert "drums" in r2.get("stemsOnset", {})
+print("DIRECT ANALYSIS CHECKS PASSED (ML)")
