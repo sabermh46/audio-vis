@@ -2,10 +2,10 @@ import { Visualizer } from './Visualizer.js';
 
 const PARTICLES = 360;
 
-// Motion tuning (all per-second where it matters).
-const WARP_BASE = 0.18;     // baseline forward speed (depth units / s)
-const WARP_VOL = 0.45;      // loudness adds forward speed
-const WARP_KICK = 0.9;      // beat adds a forward surge
+// Motion tuning (all per-second where it matters). Forward speed reduced 20%.
+const WARP_BASE = 0.144;    // baseline forward speed (depth units / s)
+const WARP_VOL = 0.36;      // loudness adds forward speed
+const WARP_KICK = 0.72;     // beat adds a forward surge
 const SPIN_BASE = 0.25;     // baseline spiral rotation (rad / s)
 const SPIN_BASS = 1.6;      // bass winds the spiral faster
 const SPIN_KICK = 2.6;      // beat snaps the rotation forward
@@ -13,6 +13,12 @@ const TWIST = 2.4;          // how much a particle's angle advances as it flies 
 const HUE_RATE = 26;        // degrees / s continuous hue drift
 const HUE_KICK = 40;        // beat jumps the hue
 const Z_MIN = 0.02;         // depth at which a particle has passed the camera → respawn
+
+// The dots are split into three equal groups, each driven by its own sound
+// element, so the groups travel at different rates as the mix shifts.
+const GROUPS = ['vocals', 'bass', 'treble'];
+const GROUP_BASE = 0.7;     // baseline share of warp speed for a group
+const GROUP_GAIN = 0.9;     // extra speed when that group's element is loud
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -67,13 +73,16 @@ export class HyperspaceVisualizer extends Visualizer {
   #beatEnv = 0;    // decays after each beat, drives kicks/glow
 
   onInit() {
-    // Distribute depths across the tunnel so the field is full immediately.
-    this.#particles = Array.from({ length: PARTICLES }, () => this.#spawn(Math.random()));
+    // Distribute depths across the tunnel so the field is full immediately;
+    // split the dots evenly across the three sound groups (i % 3).
+    this.#particles = Array.from({ length: PARTICLES },
+      (_, i) => this.#spawn(Math.random(), GROUPS[i % GROUPS.length]));
   }
 
-  #spawn(z = 1) {
+  #spawn(z = 1, group = 'vocals') {
     return {
       z,
+      group,                              // 'vocals' | 'bass' | 'treble' (preserved on respawn)
       angle: Math.random() * Math.PI * 2,
       speed: 0.6 + Math.random() * 0.9,   // per-particle warp multiplier
       hue: Math.random() * 60 - 30,       // per-particle hue offset
@@ -82,8 +91,15 @@ export class HyperspaceVisualizer extends Visualizer {
   }
 
   render(ctx, frame, dt, { width, height }) {
-    const { bands, volume, beat } = frame;
+    const { bands, stems, volume, beat } = frame;
     const bass = bands.bass;
+
+    // Each dot group follows its own element; the glow/spin use volume/bass.
+    const energy = {
+      vocals: stems?.vocals ?? bands.mid,
+      bass: stems?.bass ?? bands.bass,
+      treble: bands.treble,
+    };
 
     if (beat) this.#beatEnv = 1;
     this.#beatEnv = Math.max(0, this.#beatEnv - dt * 2.6);
@@ -120,9 +136,12 @@ export class HyperspaceVisualizer extends Visualizer {
     ctx.globalCompositeOperation = 'lighter';
 
     for (const p of this.#particles) {
-      p.z -= warp * p.speed * dt;
+      // This particle's forward speed is gated by its own sound group, so the
+      // three groups visibly travel at different rates as the mix shifts.
+      const pWarp = warp * p.speed * (GROUP_BASE + energy[p.group] * GROUP_GAIN);
+      p.z -= pWarp * dt;
       if (p.z <= Z_MIN) {
-        Object.assign(p, this.#spawn(1));
+        Object.assign(p, this.#spawn(1, p.group)); // keep its group → counts stay even
         continue;
       }
 
@@ -142,7 +161,7 @@ export class HyperspaceVisualizer extends Visualizer {
       const light = 50 + depth * 22;
 
       // Streak from where it was a moment ago → longer when warping faster.
-      const depthPrev = clamp(1 - (p.z + warp * p.speed * dt * 3.5), 0, 1);
+      const depthPrev = clamp(1 - (p.z + pWarp * dt * 3.5), 0, 1);
       const rPrev = maxR * Math.pow(depthPrev, 1.7);
       const angPrev = p.angle + this.#spin + depthPrev * TWIST;
       ctx.strokeStyle = `hsla(${hue}, 92%, ${light}%, ${alpha * 0.5})`;
