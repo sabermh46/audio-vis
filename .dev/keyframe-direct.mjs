@@ -1,7 +1,7 @@
 // Pure unit test for keyframe evaluation + legacy migration (no browser/server).
 // Usage: node .dev/keyframe-direct.mjs
 import {
-  evaluateKeyframes, evaluateColorKeyframes, hexToRgb, rgbToHex, paramAt,
+  evaluateKeyframes, evaluateColorKeyframes, hexToRgb, rgbToHex, paramAt, compileComponent,
 } from '../src/components/KeyframeEvaluator.js';
 import { migrateAutomation, normalizeKeyframes } from '../src/components/SceneMigrate.js';
 
@@ -55,6 +55,34 @@ check('migrate object passthrough', migrateAutomation({ intensity: [{ t: 1, v: 1
 const norm = normalizeKeyframes([{ t: 5, v: 0.5 }, { t: 1, v: 0.1 }, { t: 5.0005, v: 0.9 }]);
 check('normalize sorts', norm[0].t === 1);
 check('normalize dedupes near-equal t (later wins)', norm.length === 2 && norm[1].v === 0.9, JSON.stringify(norm));
+
+// --- compileComponent parity (play-mode precompute) ---
+const FPS = 60;
+const comp = {
+  params: { baseIntensity: 0.3, sensitivity: 1, size: 0.25, opacity: 1, color: '#000000' },
+  automation: {
+    intensity: [{ t: 0, v: 0.2 }, { t: 2, v: 1 }],
+    color: [{ t: 0, v: '#000000' }, { t: 2, v: '#ffffff' }],
+  },
+};
+const frameCount = Math.ceil(3 * FPS) + 1;
+const tbl = compileComponent(comp, FPS, frameCount);
+check('compiled intensity is a typed array', tbl.intensity instanceof Float32Array && tbl.intensity.length === frameCount);
+check('compiled color is a string array', Array.isArray(tbl.color) && tbl.color.length === frameCount);
+check('params without keyframes → null + static', tbl.sensitivity === null && tbl.size === null
+  && tbl.static.sensitivity === 1 && tbl.static.size === 0.25);
+// Parity at sample times: table[round(t*fps)] ≈ paramAt(...) at that t.
+let parityOk = true;
+for (const t of [0, 0.5, 1, 1.5, 2, 2.5]) {
+  const idx = Math.round(t * FPS);
+  if (Math.abs(tbl.intensity[idx] - paramAt(comp.automation, 'intensity', idx / FPS, 0.3)) > 1e-4) parityOk = false;
+}
+check('compiled numeric parity with paramAt', parityOk);
+check('compiled clamps before-first/after-last',
+  approx(tbl.intensity[0], 0.2) && approx(tbl.intensity[frameCount - 1], 1),
+  `${tbl.intensity[0]} ${tbl.intensity[frameCount - 1]}`);
+const cmidIdx = Math.round(1 * FPS);
+check('compiled color parity (midpoint ≈ #808080)', Math.abs(hexToRgb(tbl.color[cmidIdx]).r - 128) <= 1, tbl.color[cmidIdx]);
 
 if (failures.length) {
   console.log(`\n${failures.length} failures`);

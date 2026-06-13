@@ -137,9 +137,13 @@ try {
   check('hybrid renders (base + element)', lit > 5000, `${lit} px`);
   await p2.screenshot({ path: path.join(OUT, '16-editor-hybrid.png') });
 
+  // Auto-applied scene plays in optimized (precomputed) play mode.
+  check('reopened scene is in play mode', await p2.evaluate(() => window.__app.compositor.getMode()) === 'play');
+
   // --- Explicit Load saved / Clear controls ---
   await p2.click('[data-action="editor"]');
   await p2.waitForSelector('.av-editor.open', { timeout: 4000 });
+  check('editor open → edit mode', await p2.evaluate(() => window.__app.compositor.getMode()) === 'edit');
   const status = await p2.textContent('.av-editor-scenestatus');
   check('editor shows saved-scene status', /saved scene is loaded/i.test(status), status);
   check('Load saved button enabled', !(await p2.$eval('.av-editor-load', (b) => b.disabled)));
@@ -153,6 +157,18 @@ try {
   await p2.waitForTimeout(400);
   check('Load saved restores the scene',
     (await p2.evaluate(() => window.__app.compositor.getScene().components.length)) === 1);
+
+  // Close the editor → back to optimized play mode, still rendering.
+  await p2.click('.av-editor-close');
+  await p2.waitForTimeout(300);
+  check('editor close → play mode', await p2.evaluate(() => window.__app.compositor.getMode()) === 'play');
+  const litPlay = await p2.evaluate(() => {
+    const c = document.querySelector('.av-stage > canvas');
+    const px = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    let n = 0; for (let i = 3; i < px.length; i += 4) if (px[i] > 0) n++;
+    return n;
+  });
+  check('play mode renders the scene', litPlay > 5000, `${litPlay} px`);
 
   // --- Legacy migration: a region-shape scene must upgrade to keyframes on load ---
   await fetch(`http://127.0.0.1:8765/library/${tid}/scenes`, {

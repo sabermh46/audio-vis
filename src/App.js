@@ -356,6 +356,7 @@ export class App {
       baseVisualizer: this.registry.create(baseId),
       scene: this.#blankScene(baseId),
       getTime: () => this.audioEngine.currentTime,
+      getDuration: () => this.audioEngine.duration,
       componentRegistry: this.componentRegistry,
     });
     this.host.setVisualizer(this.compositor);
@@ -375,6 +376,7 @@ export class App {
         baseVisualizer: baseId ? this.registry.create(baseId) : null,
         scene,
         getTime: () => this.audioEngine.currentTime,
+        getDuration: () => this.audioEngine.duration,
         componentRegistry: this.componentRegistry,
       });
       this.host.setVisualizer(this.compositor);
@@ -427,11 +429,14 @@ export class App {
     this.#transport.setEditorOpen(this.#editorOpen);
     if (this.#editorOpen) {
       this.#ensureCompositor();
+      this.compositor.setMode('edit'); // live keyframe eval while authoring
       this.#editor.setEnabled(true);
       this.#pushEditorTrack();
       this.#editor.setScene(this.compositor.getScene());
-    } else if (this.#canSaveScene()) {
-      this.#saveScene(); // autosave on close
+    } else {
+      if (this.#canSaveScene()) this.#saveScene(); // autosave on close
+      // Back to optimized playback: precomputed automation tables.
+      this.compositor?.setMode('play');
     }
   }
 

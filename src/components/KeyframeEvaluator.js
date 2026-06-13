@@ -78,3 +78,45 @@ export function paramAt(automation, param, t, fallback) {
   if (PARAM_RANGES[param]?.color) return evaluateColorKeyframes(kfs, t, fallback);
   return evaluateKeyframes(kfs, t, fallback);
 }
+
+const NUMERIC_PARAMS = ['intensity', 'sensitivity', 'size', 'opacity'];
+
+/**
+ * Precompute a component's animated parameters into dense per-frame lookup
+ * tables (the play-mode "dynamic programming" step). A param WITH keyframes
+ * gets a sampled array; a param WITHOUT keyframes gets null + a static
+ * fallback (no array allocated). Numeric → Float32Array; color → hex string[].
+ *
+ * @param {object} component  scene component { automation, params }
+ * @param {number} fps        samples per second
+ * @param {number} frameCount number of samples (>= 1)
+ * @param {object} [fallbacks] static fallbacks; defaults derived from params
+ * @returns {{intensity,sensitivity,size,opacity,color, static:{...}}}
+ */
+export function compileComponent(component, fps, frameCount, fallbacks) {
+  const a = component.automation ?? {};
+  const p = component.params ?? {};
+  const fb = fallbacks ?? {
+    intensity: p.baseIntensity ?? 0.3,
+    sensitivity: p.sensitivity ?? 1,
+    size: p.size ?? 0.25,
+    opacity: p.opacity ?? 1,
+    color: p.color ?? '#ffffff',
+  };
+  const out = { intensity: null, sensitivity: null, size: null, opacity: null, color: null, static: fb };
+  const n = Math.max(1, frameCount | 0);
+
+  for (const param of NUMERIC_PARAMS) {
+    if (a[param]?.length) {
+      const arr = new Float32Array(n);
+      for (let i = 0; i < n; i++) arr[i] = evaluateKeyframes(a[param], i / fps, fb[param]);
+      out[param] = arr;
+    }
+  }
+  if (a.color?.length) {
+    const arr = new Array(n);
+    for (let i = 0; i < n; i++) arr[i] = evaluateColorKeyframes(a.color, i / fps, fb.color);
+    out.color = arr;
+  }
+  return out;
+}
