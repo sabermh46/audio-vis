@@ -1,13 +1,21 @@
 import { EventEmitter } from '../core/EventEmitter.js';
 import { clamp } from '../utils/format.js';
-import { PARAM_RANGES } from '../components/KeyframeEvaluator.js';
 import { normalizeKeyframes } from '../components/SceneMigrate.js';
 
 const MAX_BEAT_TICKS = 400;
 const PAD = 6;                 // vertical padding so dots aren't clipped
-const ANIM_PARAMS = ['intensity', 'sensitivity', 'size', 'opacity', 'color'];
-// Inspector field → the static fallback key the lane's empty-state reads.
-const FALLBACK_KEY = { intensity: 'baseIntensity', sensitivity: 'sensitivity', size: 'size', opacity: 'opacity', color: 'color' };
+
+// A scene component's animatable params as keyframe-lane descriptors.
+// `fallback` is the static params key the empty-curve reads (intensity →
+// params.baseIntensity); everything else mirrors that key.
+const COMPONENT_PARAMS = [
+  { key: 'intensity', label: 'Intensity', min: 0, max: 1, color: false, fallback: 'baseIntensity', default: 0.3 },
+  { key: 'sensitivity', label: 'Sensitivity', min: 0, max: 2, color: false, fallback: 'sensitivity', default: 1 },
+  { key: 'size', label: 'Size', min: 0.05, max: 0.6, color: false, fallback: 'size', default: 0.25 },
+  { key: 'opacity', label: 'Opacity', min: 0, max: 1, color: false, fallback: 'opacity', default: 1 },
+  { key: 'color', label: 'Color', min: 0, max: 1, color: true, fallback: 'color', default: '#ffffff' },
+];
+const BASE_ID = '__base__';
 
 /**
  * Scene editor: place reactive elements on the stage, bind each to a signal,
@@ -39,6 +47,7 @@ export class SceneEditor extends EventEmitter {
   #open = false;
   #scene = { base: null, components: [] };
   #selectedId = null;
+  #baseParams = [];      // base visualizer's keyframable descriptors (from App)
   #activeParam = 'intensity';
   #selectedKf = -1;
   #duration = 0;
@@ -81,10 +90,7 @@ export class SceneEditor extends EventEmitter {
         <button class="av-editor-save">Save scene</button>
       </aside>
       <div class="av-editor-timeline">
-        <div class="av-tl-params">
-          ${ANIM_PARAMS.map((p, i) =>
-            `<button class="av-tl-param${i === 0 ? ' active' : ''}" data-param="${p}">${p[0].toUpperCase()}${p.slice(1)}</button>`).join('')}
-        </div>
+        <div class="av-tl-params"></div>
         <div class="av-tl-track">
           <div class="av-tl-beats"></div>
           <svg class="av-tl-curve"><polyline points=""></polyline></svg>
@@ -142,6 +148,18 @@ export class SceneEditor extends EventEmitter {
 
   setBaseOptions(options) { this.#baseOptions = options; this.#renderBaseOptions(); }
 
+  /** Keyframable descriptors of the current base visualizer (App pushes these). */
+  setBaseParams(descriptors) {
+    this.#baseParams = descriptors ?? [];
+    if (this.#selectedId === BASE_ID && !this.#baseParams.length) {
+      this.#selectedId = this.#scene.components[0]?.id ?? null;
+    }
+    this.#renderList();
+    this.#renderParamBar();
+    this.#renderInspector();
+    this.#renderLane();
+  }
+
   setEnabled(enabled) { this.#el.classList.toggle('av-editor-disabled', !enabled); }
 
   setTrack({ trackId, duration, beats, canSave, hasSaved }) {
@@ -160,13 +178,15 @@ export class SceneEditor extends EventEmitter {
   }
 
   setScene(scene) {
-    this.#scene = scene ?? { base: null, components: [] };
-    if (!this.#scene.components.find((c) => c.id === this.#selectedId)) {
+    this.#scene = scene ?? { base: { id: null, params: {}, automation: {} }, components: [] };
+    const keepBase = this.#selectedId === BASE_ID && this.#baseParams.length;
+    if (!keepBase && !this.#scene.components.find((c) => c.id === this.#selectedId)) {
       this.#selectedId = this.#scene.components[0]?.id ?? null;
     }
     this.#selectedKf = -1;
-    if (this.#baseSelect) this.#baseSelect.value = this.#scene.base ?? '__none__';
+    if (this.#baseSelect) this.#baseSelect.value = this.#scene.base?.id ?? '__none__';
     this.#renderList();
+    this.#renderParamBar();
     this.#renderInspector();
     this.#renderHandles();
     this.#renderLane();
@@ -210,13 +230,72 @@ export class SceneEditor extends EventEmitter {
     this.#baseSelect.innerHTML =
       `<option value="__none__">None (blank)</option>` +
       this.#baseOptions.map((o) => `<option value="${o.id}">${o.name}</option>`).join('');
-    this.#baseSelect.value = this.#scene.base ?? '__none__';
+    this.#baseSelect.value = this.#scene.base?.id ?? '__none__';
+  }
+
+  /** Build the timeline param buttons from the active target's descriptors. */
+  #renderParamBar() {
+    const descs = this.#target()?.descriptors ?? [];
+    if (descs.length && !descs.find((d) => d.key === this.#activeParam)) {
+      this.#activeParam = descs[0].key;
+    }
+    this.#paramBarEl.innerHTML = descs.map((d) =>
+      `<button class="av-tl-param${d.key === this.#activeParam ? ' active' : ''}" data-param="${d.key}">${d.label}</button>`).join('');
+  }
+
+  /**
+   * The current keyframe target — a scene component or the base layer — as a
+   * uniform view so the inspector + lane machinery works for both.
+   */
+  #target() {
+    if (this.#selectedId === BASE_ID) {
+      if (!this.#baseParams.length) return null;
+      const base = this.#scene.base ?? (this.#scene.base = { id: null, params: {}, automation: {} });
+      base.params = base.params ?? {};
+      base.automation = base.automation ?? {};
+      const find = (k) => this.#baseParams.find((d) => d.key === k);
+      return {
+        isBase: true,
+        descriptors: this.#baseParams,
+        params: base.params,
+        automation: base.automation,
+        fallbackFor: (k) => base.params[k] ?? find(k)?.default ?? 0,
+        rangeFor: (k) => { const d = find(k) ?? { min: 0, max: 1 }; return { min: d.min, max: d.max, color: !!d.color }; },
+        commit: (automation) => this.emit('updateBase', { automation }),
+      };
+    }
+    const c = this.#scene.components.find((x) => x.id === this.#selectedId);
+    if (!c) return null;
+    c.automation = c.automation ?? {};
+    const find = (k) => COMPONENT_PARAMS.find((d) => d.key === k);
+    return {
+      isBase: false,
+      comp: c,
+      descriptors: COMPONENT_PARAMS,
+      params: c.params,
+      automation: c.automation,
+      fallbackFor: (k) => { const d = find(k); return c.params[d?.fallback] ?? d?.default ?? 0; },
+      rangeFor: (k) => { const d = find(k) ?? { min: 0, max: 1 }; return { min: d.min, max: d.max, color: !!d.color }; },
+      commit: (automation) => this.emit('updateComponent', { id: c.id, patch: { automation } }),
+    };
   }
 
   #renderList() {
     this.#listEl.textContent = '';
+    // Base layer as a selectable row (only when the base declares params).
+    if (this.#baseParams.length) {
+      const name = this.#baseOptions.find((o) => o.id === this.#scene.base?.id)?.name ?? 'Base';
+      const row = document.createElement('div');
+      row.className = 'av-editor-item av-editor-item-base' + (this.#selectedId === BASE_ID ? ' active' : '');
+      row.innerHTML = `<span class="av-editor-item-name">▣ ${name}</span><span class="av-editor-item-sig">base</span>`;
+      row.querySelector('.av-editor-item-name').addEventListener('click', () => {
+        this.#selectedId = BASE_ID; this.#selectedKf = -1;
+        this.#renderList(); this.#renderParamBar(); this.#renderInspector(); this.#renderHandles(); this.#renderLane();
+      });
+      this.#listEl.appendChild(row);
+    }
     if (!this.#scene.components.length) {
-      this.#listEl.innerHTML = '<div class="av-editor-empty">No elements yet.</div>';
+      if (!this.#baseParams.length) this.#listEl.innerHTML = '<div class="av-editor-empty">No elements yet.</div>';
       return;
     }
     for (const c of this.#scene.components) {
@@ -228,7 +307,7 @@ export class SceneEditor extends EventEmitter {
         <button class="av-editor-item-del" title="Remove">🗑</button>`;
       row.querySelector('.av-editor-item-name').addEventListener('click', () => {
         this.#selectedId = c.id; this.#selectedKf = -1;
-        this.#renderList(); this.#renderInspector(); this.#renderHandles(); this.#renderLane();
+        this.#renderList(); this.#renderParamBar(); this.#renderInspector(); this.#renderHandles(); this.#renderLane();
       });
       row.querySelector('.av-editor-item-del').addEventListener('click', (e) => {
         e.stopPropagation();
@@ -241,6 +320,7 @@ export class SceneEditor extends EventEmitter {
   #selected() { return this.#scene.components.find((c) => c.id === this.#selectedId) ?? null; }
 
   #renderInspector() {
+    if (this.#selectedId === BASE_ID) { this.#renderBaseInspector(); return; }
     const c = this.#selected();
     if (!c) { this.#inspectorEl.textContent = ''; return; }
     const meta = this.#components.find((m) => m.type === c.type);
@@ -277,6 +357,33 @@ export class SceneEditor extends EventEmitter {
     }
   }
 
+  /** Inspector for the base layer: one slider/color per declared param. */
+  #renderBaseInspector() {
+    const base = this.#scene.base ?? { params: {} };
+    base.params = base.params ?? {};
+    const fields = this.#baseParams.map((d) => {
+      const v = base.params[d.key] ?? d.default;
+      if (d.color) {
+        return `<label class="av-editor-label">${d.label}</label><input type="color" data-bk="${d.key}" value="${v}">`;
+      }
+      const step = (d.max - d.min) <= 2 ? 0.01 : 1;
+      return `<label class="av-editor-label">${d.label} <b>${typeof v === 'number' ? v.toFixed(2) : v}</b></label>` +
+        `<input type="range" data-bk="${d.key}" min="${d.min}" max="${d.max}" step="${step}" value="${v}">`;
+    }).join('');
+    this.#inspectorEl.innerHTML = fields +
+      `<div class="av-editor-hint">Base layer. Sliders set the value used when a parameter has no keyframes.</div>`;
+    for (const d of this.#baseParams) {
+      const input = this.#inspectorEl.querySelector(`[data-bk="${d.key}"]`);
+      input.addEventListener(d.color ? 'change' : 'input', (e) => {
+        const val = d.color ? e.target.value : +e.target.value;
+        base.params[d.key] = val;
+        this.emit('updateBase', { params: { [d.key]: val } });
+        if (!d.color) { const b = input.previousElementSibling?.querySelector('b'); if (b) b.textContent = val.toFixed(2); }
+        if (!this.#kfs(false)?.length) this.#renderLane();
+      });
+    }
+  }
+
   /** Apply a patch to the selected component locally + emit for the compositor. */
   #patch(patch) {
     const c = this.#selected();
@@ -292,6 +399,7 @@ export class SceneEditor extends EventEmitter {
 
   #renderHandles() {
     this.#placeLayer.textContent = '';
+    if (this.#selectedId === BASE_ID) return; // base layer has no stage position
     const c = this.#selected();
     if (!c) return;
     const handle = document.createElement('div');
@@ -325,7 +433,7 @@ export class SceneEditor extends EventEmitter {
   #secToPx(t) { return (t / (this.#duration || 1)) * this.#tl.clientWidth; }
   #pxToSec(px) { return (px / (this.#tl.clientWidth || 1)) * (this.#duration || 0); }
 
-  #range() { return PARAM_RANGES[this.#activeParam]; }
+  #range() { return this.#target()?.rangeFor(this.#activeParam) ?? { min: 0, max: 1, color: false }; }
 
   #valToPy(v) {
     const { min, max } = this.#range();
@@ -343,21 +451,20 @@ export class SceneEditor extends EventEmitter {
 
   /** Active param's keyframe array (live ref). `create` adds the key if absent. */
   #kfs(create = true) {
-    const c = this.#selected();
-    if (!c) return null;
-    if (!create) return c.automation?.[this.#activeParam];
-    c.automation = c.automation ?? {};
-    c.automation[this.#activeParam] = c.automation[this.#activeParam] ?? [];
-    return c.automation[this.#activeParam];
+    const tgt = this.#target();
+    if (!tgt) return null;
+    if (!create) return tgt.automation[this.#activeParam];
+    tgt.automation[this.#activeParam] = tgt.automation[this.#activeParam] ?? [];
+    return tgt.automation[this.#activeParam];
   }
 
-  /** Sort+dedupe the active param; prune if empty; emit the full automation. */
+  /** Sort+dedupe the active param; prune if empty; commit via the target. */
   #commitKfs() {
-    const c = this.#selected();
-    if (!c) return;
-    c.automation[this.#activeParam] = normalizeKeyframes(c.automation[this.#activeParam]);
-    if (!c.automation[this.#activeParam].length) delete c.automation[this.#activeParam];
-    this.emit('updateComponent', { id: c.id, patch: { automation: c.automation } });
+    const tgt = this.#target();
+    if (!tgt) return;
+    tgt.automation[this.#activeParam] = normalizeKeyframes(tgt.automation[this.#activeParam] ?? []);
+    if (!tgt.automation[this.#activeParam].length) delete tgt.automation[this.#activeParam];
+    tgt.commit(tgt.automation);
   }
 
   #renderBeats() {
@@ -405,9 +512,9 @@ export class SceneEditor extends EventEmitter {
         kfs.map((k) => `${this.#secToPx(k.t)},${this.#valToPy(k.v)}`).join(' '));
     } else {
       // Empty state: a flat line at the static fallback value.
-      const c = this.#selected();
-      const fb = c ? (c.params[FALLBACK_KEY[this.#activeParam]] ?? 0) : 0;
-      const y = this.#valToPy(fb);
+      const tgt = this.#target();
+      const fb = tgt ? tgt.fallbackFor(this.#activeParam) : 0;
+      const y = this.#valToPy(typeof fb === 'number' ? fb : 0);
       const w = this.#tl.clientWidth;
       this.#curveEl.setAttribute('points', `0,${y} ${w},${y}`);
     }
@@ -416,10 +523,10 @@ export class SceneEditor extends EventEmitter {
   #wireTimeline(listen) {
     listen(this.#tl, 'pointerdown', (e) => {
       if (e.target.closest('.av-tl-dot')) return; // dot handles its own drag
-      const c = this.#selected();
+      const tgt = this.#target();
       const rect = this.#tl.getBoundingClientRect();
       const sec = this.#pxToSec(e.clientX - rect.left);
-      if (!c) { this.emit('seek', sec); return; }
+      if (!tgt) { this.emit('seek', sec); return; }
 
       this.#dragging = false;
       const downY = e.clientY - rect.top;
@@ -431,7 +538,7 @@ export class SceneEditor extends EventEmitter {
         // A click → add a keyframe.
         const range = this.#range();
         const t = clamp(sec, 0, this.#duration);
-        const v = range.color ? (c.params.color ?? '#ffffff') : this.#pyToVal(downY);
+        const v = range.color ? (tgt.fallbackFor(this.#activeParam) ?? '#ffffff') : this.#pyToVal(downY);
         this.#kfs().push({ t, v });
         this.#commitKfs();
         const arr = this.#kfs(false) ?? [];

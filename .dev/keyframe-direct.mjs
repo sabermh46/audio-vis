@@ -1,9 +1,10 @@
 // Pure unit test for keyframe evaluation + legacy migration (no browser/server).
 // Usage: node .dev/keyframe-direct.mjs
 import {
-  evaluateKeyframes, evaluateColorKeyframes, hexToRgb, rgbToHex, paramAt, compileComponent,
+  evaluateKeyframes, evaluateColorKeyframes, hexToRgb, rgbToHex, paramAt, paramAtDesc,
+  compileComponent, compileParams,
 } from '../src/components/KeyframeEvaluator.js';
-import { migrateAutomation, normalizeKeyframes } from '../src/components/SceneMigrate.js';
+import { migrateAutomation, normalizeKeyframes, migrateBase } from '../src/components/SceneMigrate.js';
 
 const failures = [];
 const approx = (a, b, eps = 0.02) => Math.abs(a - b) <= eps;
@@ -83,6 +84,33 @@ check('compiled clamps before-first/after-last',
   `${tbl.intensity[0]} ${tbl.intensity[frameCount - 1]}`);
 const cmidIdx = Math.round(1 * FPS);
 check('compiled color parity (midpoint ≈ #808080)', Math.abs(hexToRgb(tbl.color[cmidIdx]).r - 128) <= 1, tbl.color[cmidIdx]);
+
+// --- descriptor-driven compileParams (base-layer params) ---
+const baseDescriptors = [
+  { key: 'starIntensity', min: 0, max: 1, default: 0.7 },
+  { key: 'starHue', min: 0, max: 360, default: 250 },        // numeric despite "hue"
+  { key: 'warpSpeed', min: 0, max: 2, default: 1 },
+  { key: 'starDensity', min: 0, max: 1, default: 0.8 },       // no keyframes → null table
+];
+const baseAuto = {
+  starHue: [{ t: 0, v: 0 }, { t: 2, v: 360 }],
+  warpSpeed: [{ t: 0, v: 0.5 }, { t: 2, v: 1.5 }],
+};
+const bp = compileParams(baseAuto, {}, baseDescriptors, FPS, frameCount);
+check('base starHue is numeric Float32Array (not color)', bp.tables.starHue instanceof Float32Array);
+check('base starHue numeric parity', approx(bp.tables.starHue[Math.round(1 * FPS)],
+  evaluateKeyframes(baseAuto.starHue, 1, 250), 1), `${bp.tables.starHue[Math.round(1 * FPS)]}`);
+check('base starHue clamps ends', approx(bp.tables.starHue[0], 0, 1) && approx(bp.tables.starHue[frameCount - 1], 360, 1));
+check('base warpSpeed parity', approx(bp.tables.warpSpeed[Math.round(1 * FPS)], 1));
+check('base non-keyframed → null + static', bp.tables.starDensity === null && bp.static.starDensity === 0.8);
+check('paramAtDesc numeric for hue', approx(paramAtDesc(baseAuto, baseDescriptors[1], 1, 250), 180, 1));
+
+// --- migrateBase (scene.base string → object) ---
+check('migrateBase null', JSON.stringify(migrateBase(null)) === JSON.stringify({ id: null, params: {}, automation: {} }));
+check('migrateBase string', JSON.stringify(migrateBase('river-night')) === JSON.stringify({ id: 'river-night', params: {}, automation: {} }));
+const mb = migrateBase({ id: 'x', params: { a: 1 }, automation: { k: [{ t: 0, v: 1 }] } });
+check('migrateBase object passthrough', mb.id === 'x' && mb.params.a === 1 && mb.automation.k.length === 1);
+check('migrateBase idempotent', JSON.stringify(migrateBase(mb)) === JSON.stringify(mb));
 
 if (failures.length) {
   console.log(`\n${failures.length} failures`);

@@ -1,6 +1,6 @@
 import { Visualizer } from './Visualizer.js';
 import { resolveSignal } from '../components/SignalResolver.js';
-import { paramAt, compileComponent } from '../components/KeyframeEvaluator.js';
+import { paramAt, paramAtDesc, compileComponent, compileParams } from '../components/KeyframeEvaluator.js';
 import { migrateScene } from '../components/SceneMigrate.js';
 import { clamp } from '../utils/format.js';
 
@@ -40,6 +40,8 @@ export class SceneCompositor extends Visualizer {
   #mode = 'play';
   #compiled = null;         // Map id -> compiled tables; null = needs (re)compile
   #frameCount = 0;
+  #baseDescriptors = [];    // base visualizer's static params (keyframable)
+  #baseResolved = {};       // reused per-frame resolved base param values
   #ctx = null;
   #w = 0;
   #h = 0;
@@ -47,10 +49,15 @@ export class SceneCompositor extends Visualizer {
   constructor({ baseVisualizer = null, scene, getTime, getDuration, componentRegistry }) {
     super();
     this.#base = baseVisualizer;
-    this.#scene = migrateScene(scene ?? { base: null, canvas: { bg: '#05060c' }, components: [] });
+    this.#scene = migrateScene(scene ?? { base: { id: null, params: {}, automation: {} }, canvas: { bg: '#05060c' }, components: [] });
     this.#getTime = getTime ?? (() => 0);
     this.#getDuration = getDuration ?? (() => 0);
     this.#registry = componentRegistry;
+    this.#refreshBaseDescriptors();
+  }
+
+  #refreshBaseDescriptors() {
+    this.#baseDescriptors = this.#base ? (this.#base.constructor.params ?? []) : [];
   }
 
   setMode(mode) {
@@ -81,13 +88,6 @@ export class SceneCompositor extends Visualizer {
     this.#h = height;
     const t = this.#getTime();
 
-    if (this.#base) {
-      this.#base.render(ctx, frame, dt, { width, height }); // base clears itself
-    } else {
-      ctx.fillStyle = this.#scene.canvas?.bg ?? '#05060c';
-      ctx.fillRect(0, 0, width, height);
-    }
-
     // Play mode reads precomputed tables; compile lazily once the duration is
     // known (falls back to live eval for the frame or two before that).
     const play = this.#mode === 'play';
@@ -95,6 +95,24 @@ export class SceneCompositor extends Visualizer {
     const usingTables = play && this.#compiled;
     const idx = usingTables ? clamp(Math.round(t * PLAY_FPS), 0, this.#frameCount - 1) : 0;
     const minDim = Math.min(width, height);
+
+    if (this.#base) {
+      // Resolve the base layer's keyframable params (reused object, no alloc).
+      const baseAuto = this.#scene.base?.automation;
+      const baseP = this.#scene.base?.params ?? {};
+      const baseTbl = usingTables ? this.#compiled.get('__base__') : null;
+      for (const d of this.#baseDescriptors) {
+        if (baseTbl) {
+          this.#baseResolved[d.key] = baseTbl.tables[d.key] ? baseTbl.tables[d.key][idx] : baseTbl.static[d.key];
+        } else {
+          this.#baseResolved[d.key] = paramAtDesc(baseAuto, d, t, baseP[d.key] ?? d.default);
+        }
+      }
+      this.#base.render(ctx, frame, dt, { width, height }, this.#baseResolved); // base clears itself
+    } else {
+      ctx.fillStyle = this.#scene.canvas?.bg ?? '#05060c';
+      ctx.fillRect(0, 0, width, height);
+    }
 
     for (const s of this.#order) {
       const comp = s.comp;
@@ -156,14 +174,30 @@ export class SceneCompositor extends Visualizer {
   }
 
   setScene(scene) {
-    this.#scene = migrateScene(scene ?? { base: null, canvas: { bg: '#05060c' }, components: [] });
+    this.#scene = migrateScene(scene ?? { base: { id: null, params: {}, automation: {} }, canvas: { bg: '#05060c' }, components: [] });
     this.#rebuildInstances();
   }
 
-  setBaseVisualizer(baseVisualizer) {
+  /**
+   * Swap the base visualizer. When the visualizer TYPE changes (new id), the
+   * base's params/automation are reset to defaults so stale keyframes from the
+   * previous visualizer don't linger.
+   */
+  setBaseVisualizer(baseVisualizer, id = null) {
     this.#base?.onDestroy();
     this.#base = baseVisualizer;
     if (baseVisualizer && this.#ctx) baseVisualizer.onInit(this.#ctx, this.#w, this.#h);
+    this.#refreshBaseDescriptors();
+    this.#scene.base = { id: id ?? baseVisualizer?.constructor?.meta?.id ?? null, params: {}, automation: {} };
+    this.#compiled = null;
+  }
+
+  /** Merge keyframable base-layer params/automation (used by the editor). */
+  updateBase(patch) {
+    this.#scene.base = this.#scene.base ?? { id: null, params: {}, automation: {} };
+    if (patch.params) this.#scene.base.params = { ...this.#scene.base.params, ...patch.params };
+    if (patch.automation) this.#scene.base.automation = patch.automation;
+    this.#compiled = null;
   }
 
   addComponent(component) {
@@ -226,6 +260,11 @@ export class SceneCompositor extends Visualizer {
     this.#compiled = new Map();
     for (const s of this.#order) {
       this.#compiled.set(s.comp.id, compileComponent(s.comp, PLAY_FPS, this.#frameCount));
+    }
+    if (this.#base && this.#baseDescriptors.length) {
+      const b = this.#scene.base ?? { params: {}, automation: {} };
+      this.#compiled.set('__base__',
+        compileParams(b.automation ?? {}, b.params ?? {}, this.#baseDescriptors, PLAY_FPS, this.#frameCount));
     }
     return true;
   }

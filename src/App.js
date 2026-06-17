@@ -10,12 +10,16 @@ import { BarsVisualizer } from './visualizers/BarsVisualizer.js';
 import { WaveformVisualizer } from './visualizers/WaveformVisualizer.js';
 import { ShapesVisualizer } from './visualizers/ShapesVisualizer.js';
 import { HyperspaceVisualizer } from './visualizers/HyperspaceVisualizer.js';
+import { RiverNightVisualizer } from './visualizers/RiverNightVisualizer.js';
 import { SceneCompositor } from './visualizers/SceneCompositor.js';
 import { ComponentRegistry } from './components/ComponentRegistry.js';
 import { BouncingStar } from './components/BouncingStar.js';
 import { MirroredBars } from './components/MirroredBars.js';
 import { PulseRing } from './components/PulseRing.js';
 import { OrbitDots } from './components/OrbitDots.js';
+import { StaticMoon } from './components/StaticMoon.js';
+import { CloudGroup } from './components/CloudGroup.js';
+import { Starfield } from './components/Starfield.js';
 import { AnalysisClient } from './core/AnalysisClient.js';
 import { PrecomputedAnalysisSource } from './core/PrecomputedAnalysisSource.js';
 import { DropZone } from './ui/DropZone.js';
@@ -93,12 +97,16 @@ export class App {
     this.registry.register(WaveformVisualizer);
     this.registry.register(ShapesVisualizer);
     this.registry.register(CelestialOrreryVisualizer);
+    this.registry.register(RiverNightVisualizer);
 
     this.componentRegistry = new ComponentRegistry();
     this.componentRegistry.register(BouncingStar);
     this.componentRegistry.register(MirroredBars);
     this.componentRegistry.register(PulseRing);
     this.componentRegistry.register(OrbitDots);
+    this.componentRegistry.register(StaticMoon);
+    this.componentRegistry.register(CloudGroup);
+    this.componentRegistry.register(Starfield);
 
     // --- UI ---
     this.#dropZone = new DropZone();
@@ -170,10 +178,12 @@ export class App {
       this.#editor.setScene(this.compositor?.getScene() ?? this.#blankScene());
     }));
     sub(this.#editor.on('updateComponent', ({ id, patch }) => this.compositor?.updateComponent(id, patch)));
+    sub(this.#editor.on('updateBase', (patch) => this.compositor?.updateBase(patch)));
     sub(this.#editor.on('setBase', (id) => {
-      this.compositor?.setBaseVisualizer(id ? this.registry.create(id) : null);
-      const scene = this.compositor?.getScene();
-      if (scene) { scene.base = id; this.compositor.setScene(scene); }
+      this.#ensureCompositor();
+      this.compositor.setBaseVisualizer(id ? this.registry.create(id) : null, id); // resets base params/automation
+      this.#pushBaseParams();
+      this.#editor.setScene(this.compositor.getScene());
     }));
     sub(this.#editor.on('seek', (seconds) => this.audioEngine.seek(seconds)));
     sub(this.#editor.on('save', () => this.#saveScene()));
@@ -334,15 +344,22 @@ export class App {
 
   /** Base visualizer id currently in effect (compositor's base, else stored). */
   #currentBaseId() {
-    if (this.compositor) return this.compositor.getScene().base ?? DEFAULT_VISUALIZER;
+    if (this.compositor) return this.compositor.getScene().base?.id ?? DEFAULT_VISUALIZER;
     return this.#restoreVisualizerId();
   }
 
+  /** Push the current base visualizer's keyframable descriptors to the editor. */
+  #pushBaseParams() {
+    const id = this.#currentBaseId();
+    this.#editor.setBaseParams(this.registry.getClass(id)?.params ?? []);
+  }
+
   #blankScene(baseId) {
+    const id = baseId ?? this.#currentBaseId();
     return {
       id: `scene-${Math.floor(this.audioEngine.currentTime * 1000) % 1e6}-${this.#loadSeq}`,
       name: 'Scene',
-      base: baseId ?? this.#currentBaseId(),
+      base: { id, params: {}, automation: {} },
       canvas: { bg: '#05060c', blendMode: 'source-over', fadeTrails: 0 },
       components: [],
     };
@@ -369,9 +386,10 @@ export class App {
     let envelope = null;
     try { envelope = await this.analysisClient.getScenes(trackId); } catch { /* offline */ }
     const scene = envelope?.scenes?.[0];
-    this.#hasSavedScene = !!(scene && scene.components?.length);
+    const baseAuto = (scene && typeof scene.base === 'object') ? scene.base.automation : null;
+    this.#hasSavedScene = !!(scene && (scene.components?.length || (baseAuto && Object.keys(baseAuto).length)));
     if (this.#hasSavedScene) {
-      const baseId = scene.base ?? this.#currentBaseId();
+      const baseId = (typeof scene.base === 'object' ? scene.base?.id : scene.base) ?? this.#currentBaseId();
       this.compositor = new SceneCompositor({
         baseVisualizer: baseId ? this.registry.create(baseId) : null,
         scene,
@@ -384,6 +402,7 @@ export class App {
       this.#clearCompositor();
     }
     if (this.#editorOpen) {
+      this.#pushBaseParams();
       this.#editor.setScene(this.compositor?.getScene() ?? this.#blankScene());
       this.#pushEditorTrack();
     }
@@ -405,15 +424,19 @@ export class App {
     await this.#applySceneForTrack();
     if (this.#editorOpen) {
       this.#ensureCompositor();
+      this.#pushBaseParams();
       this.#editor.setScene(this.compositor.getScene());
       this.#pushEditorTrack();
     }
   }
 
-  /** Empty the working scene (keeps the base). Save to persist the clear. */
+  /** Empty the components (keeps the base layer + its keyframes). Save to persist. */
   #clearScene() {
     this.#ensureCompositor();
-    this.compositor.setScene(this.#blankScene(this.#currentBaseId()));
+    const scene = this.compositor.getScene();
+    scene.components = [];
+    this.compositor.setScene(scene);
+    this.#pushBaseParams();
     this.#editor.setScene(this.compositor.getScene());
   }
 
@@ -431,6 +454,7 @@ export class App {
       this.#ensureCompositor();
       this.compositor.setMode('edit'); // live keyframe eval while authoring
       this.#editor.setEnabled(true);
+      this.#pushBaseParams();
       this.#pushEditorTrack();
       this.#editor.setScene(this.compositor.getScene());
     } else {
@@ -465,10 +489,12 @@ export class App {
     const trackId = this.lastAnalysis?.trackId;
     if (!trackId || this.mode !== 'precomputed' || !this.compositor) return;
     const scene = this.compositor.getScene();
-    scene.base = this.#currentBaseId();
+    // Preserve the base OBJECT (params + automation); just resync its id.
+    if (scene.base && typeof scene.base === 'object') scene.base.id = this.#currentBaseId();
+    else scene.base = { id: this.#currentBaseId(), params: {}, automation: {} };
     try {
       await this.analysisClient.saveScene(trackId, { schemaVersion: 2, scenes: [scene] });
-      this.#hasSavedScene = scene.components.length > 0;
+      this.#hasSavedScene = scene.components.length > 0 || Object.keys(scene.base.automation ?? {}).length > 0;
       this.#editor?.flashSaved();
       if (this.#editorOpen) this.#pushEditorTrack();
     } catch (e) {

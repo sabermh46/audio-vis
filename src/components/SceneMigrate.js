@@ -10,11 +10,30 @@
  * load and re-save in the new shape.
  */
 export function migrateScene(scene) {
-  if (!scene?.components) return scene;
-  for (const c of scene.components) {
+  if (!scene) return scene;
+  scene.base = migrateBase(scene.base);
+  for (const c of scene.components ?? []) {
     c.automation = migrateAutomation(c.automation, c.params?.baseIntensity ?? 0.3);
   }
   return scene;
+}
+
+/**
+ * Normalises `scene.base` to the object form { id, params, automation }.
+ * Idempotent: a bare id string or null (the legacy shape) is wrapped; an
+ * object is left as-is with params/automation defaulted. Base automation is
+ * born in the keyframe-object shape, so a stray array is coerced to {}.
+ */
+export function migrateBase(base) {
+  if (base && typeof base === 'object' && !Array.isArray(base)) {
+    return {
+      id: base.id ?? null,
+      params: base.params && typeof base.params === 'object' ? base.params : {},
+      automation: base.automation && !Array.isArray(base.automation) && typeof base.automation === 'object'
+        ? base.automation : {},
+    };
+  }
+  return { id: typeof base === 'string' ? base : null, params: {}, automation: {} };
 }
 
 export function migrateAutomation(automation, base) {

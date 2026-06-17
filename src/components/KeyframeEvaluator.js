@@ -79,44 +79,78 @@ export function paramAt(automation, param, t, fallback) {
   return evaluateKeyframes(kfs, t, fallback);
 }
 
-const NUMERIC_PARAMS = ['intensity', 'sensitivity', 'size', 'opacity'];
+/**
+ * Evaluate a descriptor's param at time t, dispatching color vs numeric on
+ * `descriptor.color` (NOT the global PARAM_RANGES) — so arbitrary keys like a
+ * 0..360 `starHue` evaluate as numbers, not colors.
+ */
+export function paramAtDesc(automation, descriptor, t, fallback) {
+  const kfs = automation?.[descriptor.key];
+  if (descriptor.color) return evaluateColorKeyframes(kfs, t, fallback);
+  return evaluateKeyframes(kfs, t, fallback);
+}
 
 /**
- * Precompute a component's animated parameters into dense per-frame lookup
- * tables (the play-mode "dynamic programming" step). A param WITH keyframes
- * gets a sampled array; a param WITHOUT keyframes gets null + a static
- * fallback (no array allocated). Numeric → Float32Array; color → hex string[].
+ * Descriptor-driven precompute (the play-mode "dynamic programming" step).
+ * For each descriptor: a param WITH keyframes → a dense array (Float32Array
+ * for numeric, hex string[] for color); WITHOUT → tables[key]=null + a static
+ * fallback. Works for any param set (components or a visualizer's own params).
  *
- * @param {object} component  scene component { automation, params }
- * @param {number} fps        samples per second
- * @param {number} frameCount number of samples (>= 1)
- * @param {object} [fallbacks] static fallbacks; defaults derived from params
- * @returns {{intensity,sensitivity,size,opacity,color, static:{...}}}
+ * @param {object} automation  keyframe object { key: [{t,v}] }
+ * @param {object} params      static values (fallback source)
+ * @param {Array<{key,color?,default?}>} descriptors
+ * @param {object} [fallbacks] explicit per-key fallbacks (else params[key] ?? default)
+ * @returns {{ tables: Record<string, Float32Array|string[]|null>, static: Record<string, any> }}
  */
-export function compileComponent(component, fps, frameCount, fallbacks) {
-  const a = component.automation ?? {};
-  const p = component.params ?? {};
-  const fb = fallbacks ?? {
-    intensity: p.baseIntensity ?? 0.3,
-    sensitivity: p.sensitivity ?? 1,
-    size: p.size ?? 0.25,
-    opacity: p.opacity ?? 1,
-    color: p.color ?? '#ffffff',
-  };
-  const out = { intensity: null, sensitivity: null, size: null, opacity: null, color: null, static: fb };
+export function compileParams(automation, params, descriptors, fps, frameCount, fallbacks) {
+  const a = automation ?? {};
+  const p = params ?? {};
   const n = Math.max(1, frameCount | 0);
-
-  for (const param of NUMERIC_PARAMS) {
-    if (a[param]?.length) {
+  const tables = {};
+  const stat = {};
+  for (const d of descriptors) {
+    const fb = fallbacks?.[d.key] ?? p[d.key] ?? d.default;
+    stat[d.key] = fb;
+    const kfs = a[d.key];
+    if (!kfs?.length) { tables[d.key] = null; continue; }
+    if (d.color) {
+      const arr = new Array(n);
+      for (let i = 0; i < n; i++) arr[i] = evaluateColorKeyframes(kfs, i / fps, fb);
+      tables[d.key] = arr;
+    } else {
       const arr = new Float32Array(n);
-      for (let i = 0; i < n; i++) arr[i] = evaluateKeyframes(a[param], i / fps, fb[param]);
-      out[param] = arr;
+      for (let i = 0; i < n; i++) arr[i] = evaluateKeyframes(kfs, i / fps, fb);
+      tables[d.key] = arr;
     }
   }
-  if (a.color?.length) {
-    const arr = new Array(n);
-    for (let i = 0; i < n; i++) arr[i] = evaluateColorKeyframes(a.color, i / fps, fb.color);
-    out.color = arr;
-  }
-  return out;
+  return { tables, static: stat };
+}
+
+// Fixed descriptors for a scene component's animatable params. `fallback`
+// names the static params key (intensity falls back to params.baseIntensity).
+const COMPONENT_DESCRIPTORS = [
+  { key: 'intensity', color: false, fallback: 'baseIntensity', default: 0.3 },
+  { key: 'sensitivity', color: false, fallback: 'sensitivity', default: 1 },
+  { key: 'size', color: false, fallback: 'size', default: 0.25 },
+  { key: 'opacity', color: false, fallback: 'opacity', default: 1 },
+  { key: 'color', color: true, fallback: 'color', default: '#ffffff' },
+];
+
+/**
+ * Component compile — same signature and return shape as before
+ * ({intensity,sensitivity,size,opacity,color, static}), now delegating to the
+ * descriptor-driven compileParams so there is a single code path.
+ */
+export function compileComponent(component, fps, frameCount, fallbacks) {
+  const p = component.params ?? {};
+  const fb = fallbacks ?? Object.fromEntries(
+    COMPONENT_DESCRIPTORS.map((d) => [d.key, p[d.fallback] ?? d.default]),
+  );
+  const { tables, static: stat } = compileParams(
+    component.automation, p, COMPONENT_DESCRIPTORS, fps, frameCount, fb,
+  );
+  return {
+    intensity: tables.intensity, sensitivity: tables.sensitivity, size: tables.size,
+    opacity: tables.opacity, color: tables.color, static: stat,
+  };
 }

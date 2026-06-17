@@ -103,6 +103,24 @@ try {
     window.__app.compositor.getScene().components[0].automation.color?.[0] ?? null);
   check('color keyframe stored as hex', colorKf && /^#[0-9a-f]{6}$/i.test(colorKf.v), JSON.stringify(colorKf));
 
+  // --- Base-layer keyframing (River Night exposes keyframable params) ---
+  await page.selectOption('.av-editor-base', 'river-night');
+  await page.waitForTimeout(150);
+  await page.click('.av-editor-item-base .av-editor-item-name');
+  await page.waitForTimeout(80);
+  const baseParamKeys = await page.$$eval('.av-tl-param', (els) => els.map((e) => e.dataset.param));
+  check('base layer shows star param lanes',
+    baseParamKeys.includes('starIntensity') && baseParamKeys.includes('warpSpeed'), JSON.stringify(baseParamKeys));
+  await page.click('.av-tl-param[data-param="starIntensity"]');
+  await page.waitForTimeout(60);
+  await page.mouse.click(bb.x + bb.width * 0.25, bb.y + bb.height * 0.7);
+  await page.waitForTimeout(60);
+  await page.mouse.click(bb.x + bb.width * 0.65, bb.y + bb.height * 0.2);
+  await page.waitForTimeout(100);
+  const baseKfs = await page.evaluate(() =>
+    window.__app.compositor.getScene().base.automation.starIntensity ?? []);
+  check('base starIntensity has 2 keyframes', baseKfs.length === 2 && baseKfs[0].t <= baseKfs[1].t, JSON.stringify(baseKfs));
+
   // Save.
   await page.click('.av-editor-save');
   await page.waitForTimeout(500);
@@ -113,6 +131,10 @@ try {
   check('keyframes persisted (object shape)',
     Array.isArray(savedAuto.intensity) && savedAuto.intensity.length === 2 && Array.isArray(savedAuto.color),
     JSON.stringify(Object.keys(savedAuto)));
+  const savedBase = saved.scenes?.[0]?.base;
+  check('base persisted as object with keyframes',
+    savedBase && typeof savedBase === 'object' && savedBase.id === 'river-night'
+    && savedBase.automation?.starIntensity?.length === 2, JSON.stringify(savedBase?.id));
 
   // --- Fresh page: scene must reapply on reopen ---
   const p2 = await browser.newPage({ viewport: { width: 1280, height: 800 } });
@@ -122,11 +144,18 @@ try {
   await p2.click(`.av-lib-card[data-id="${tid}"] .av-lib-main`);
   await p2.waitForSelector('[data-action="play"]:not([disabled])', { timeout: 15000 });
   await p2.waitForTimeout(800);
-  const reapplied = await p2.evaluate(() => ({
-    hasComp: !!window.__app.compositor,
-    n: window.__app.compositor?.getScene().components.length ?? 0,
-  }));
+  const reapplied = await p2.evaluate(() => {
+    const sc = window.__app.compositor?.getScene();
+    return {
+      hasComp: !!window.__app.compositor,
+      n: sc?.components.length ?? 0,
+      baseId: sc?.base?.id,
+      baseKfs: sc?.base?.automation?.starIntensity?.length ?? 0,
+    };
+  });
   check('hybrid scene reapplied on reopen', reapplied.hasComp && reapplied.n === 1, JSON.stringify(reapplied));
+  check('base layer + keyframes reapplied on reopen',
+    reapplied.baseId === 'river-night' && reapplied.baseKfs === 2, JSON.stringify(reapplied));
 
   const lit = await p2.evaluate(() => {
     const c = document.querySelector('.av-stage > canvas');
@@ -189,12 +218,18 @@ try {
   await p3.waitForSelector('[data-action="play"]:not([disabled])', { timeout: 15000 });
   await p3.waitForTimeout(600);
   const migrated = await p3.evaluate(() => {
-    const a = window.__app.compositor?.getScene().components[0]?.automation;
-    return { isObject: a && !Array.isArray(a), kfs: a?.intensity ?? null };
+    const sc = window.__app.compositor?.getScene();
+    const a = sc?.components[0]?.automation;
+    return {
+      isObject: a && !Array.isArray(a), kfs: a?.intensity ?? null,
+      base: sc?.base, baseIsObject: sc?.base && typeof sc.base === 'object' && !Array.isArray(sc.base),
+    };
   });
   check('legacy region migrated to keyframe object on load',
     migrated.isObject && Array.isArray(migrated.kfs) && migrated.kfs.length === 4,
     JSON.stringify(migrated.kfs));
+  check('legacy string base migrated to object on load',
+    migrated.baseIsObject && migrated.base.id === 'bars', JSON.stringify(migrated.base));
 
   console.log('console errors:', errors.length ? JSON.stringify(errors, null, 2) : 'none');
 } finally {

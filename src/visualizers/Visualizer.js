@@ -14,6 +14,15 @@ export class Visualizer {
   /** Optional: draw a static preview for the gallery card. */
   static renderPreview(ctx, width, height) {} // eslint-disable-line no-unused-vars
 
+  /**
+   * Optional: keyframable parameters this visualizer exposes when used as a
+   * scene base layer. Each descriptor: { key, label, min, max, default,
+   * color?:boolean }. The scene editor renders sliders + keyframe lanes for
+   * these, and the compositor passes resolved values as the 5th render arg.
+   * Default: none (the visualizer isn't tunable).
+   */
+  static get params() { return []; }
+
   /** One-time setup after being attached to the host. */
   onInit(ctx, width, height) {}
 
@@ -35,8 +44,10 @@ export class Visualizer {
    *     stem separation when the server analyzed with ML, DSP proxies otherwise
    * @param {number} dt - seconds since last frame
    * @param {{width: number, height: number}} size - CSS pixel dimensions
+   * @param {object} [params] - resolved values for `static params` keys when
+   *   used as a keyframable scene base; absent (gallery use) → use defaults.
    */
-  render(ctx, frame, dt, size) {}
+  render(ctx, frame, dt, size, params) {}
 
   /** Called when the canvas resizes; dimensions are CSS pixels. */
   onResize(width, height) {}

@@ -570,6 +570,7 @@ button {
   font-size: 12px;
 }
 .av-editor-item.active { border-color: var(--accent); }
+.av-editor-item-base { background: rgba(0, 206, 201, 0.08); }
 .av-editor-item-name { flex: 1; cursor: pointer; text-transform: capitalize; }
 .av-editor-item-sig { color: var(--text-dim); font-size: 11px; }
 .av-editor-item-del { opacity: 0.6; }
