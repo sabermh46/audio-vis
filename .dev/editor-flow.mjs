@@ -109,8 +109,17 @@ try {
   await page.click('.av-editor-item-base .av-editor-item-name');
   await page.waitForTimeout(80);
   const baseParamKeys = await page.$$eval('.av-tl-param', (els) => els.map((e) => e.dataset.param));
-  check('base layer shows star param lanes',
-    baseParamKeys.includes('starIntensity') && baseParamKeys.includes('warpSpeed'), JSON.stringify(baseParamKeys));
+  check('base layer shows keyframable star lanes (incl. starSize)',
+    baseParamKeys.includes('starIntensity') && baseParamKeys.includes('starSize') && baseParamKeys.includes('warpSpeed'),
+    JSON.stringify(baseParamKeys));
+  check('signal selector is NOT a keyframe lane', !baseParamKeys.includes('starSignal'));
+
+  // The star signal is a dropdown in the base inspector — changing it persists.
+  await page.selectOption('.av-editor-inspector select[data-bk="starSignal"]', 'stem.vocals');
+  await page.waitForTimeout(80);
+  check('star signal selectable + stored',
+    await page.evaluate(() => window.__app.compositor.getScene().base.params.starSignal) === 'stem.vocals');
+
   await page.click('.av-tl-param[data-param="starIntensity"]');
   await page.waitForTimeout(60);
   await page.mouse.click(bb.x + bb.width * 0.25, bb.y + bb.height * 0.7);

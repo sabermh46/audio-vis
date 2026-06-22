@@ -1,6 +1,7 @@
 import { Visualizer } from './Visualizer.js';
+import { resolveSignal, SIGNALS } from '../components/SignalResolver.js';
 
-const HORIZON = 0.34;            // sky/water split as a fraction of height
+const HORIZON = 0.52;            // sky/water split as a fraction of height (more sky, shorter river)
 const STARS = 170;
 const STAR_TWIST = 2.4;
 const STAR_ZMIN = 0.02;
@@ -30,8 +31,12 @@ export class RiverNightVisualizer extends Visualizer {
 
   static get params() {
     return [
+      // `signal` params are a discrete selector (not keyframable); the rest are
+      // keyframable numeric lanes.
+      { key: 'starSignal', label: 'Star signal', signal: true, default: 'volume', options: SIGNALS },
       { key: 'starIntensity', label: 'Star intensity', min: 0, max: 1, default: 0.7 },
       { key: 'starDensity', label: 'Star density', min: 0, max: 1, default: 0.8 },
+      { key: 'starSize', label: 'Star size', min: 0, max: 1, default: 0.5 },
       { key: 'starHue', label: 'Star hue', min: 0, max: 360, default: 250 },
       { key: 'warpSpeed', label: 'Warp speed', min: 0, max: 2, default: 1 },
     ];
@@ -214,18 +219,22 @@ export class RiverNightVisualizer extends Visualizer {
     const density = p.starDensity ?? 0.8;
     const baseHue = p.starHue ?? 250;
     const warpMul = p.warpSpeed ?? 1;
-    const vol = frame.volume ?? 0;
+    // The starfield reacts to a selectable signal (defaults to overall volume).
+    const sig = resolveSignal(p.starSignal ?? 'volume', frame);
 
     if (frame.beat) this.#beatEnv = 1;
     this.#beatEnv = Math.max(0, this.#beatEnv - dt * 2.6);
-    const spinVel = 0.2 + vol * 1.4 + this.#beatEnv * 2.2;
+    const spinVel = 0.2 + sig * 1.4 + this.#beatEnv * 2.2;
     this.#spin += spinVel * dt;
-    const warp = (0.12 + vol * 0.4 + this.#beatEnv * 0.7) * warpMul;
+    const warp = (0.12 + sig * 0.4 + this.#beatEnv * 0.7) * warpMul;
     this.#starHueDrift = (this.#starHueDrift + (8 + this.#beatEnv * 30) * dt) % 360;
 
     const cx = width * 0.5;
     const cy = horizonY * 0.5;
-    const maxR = Math.min(width, horizonY) * 0.95;
+    // starSize scales the field radius: at 1.0 it reaches ~120% of the larger
+    // screen dimension (stars stream well past the edges).
+    const starSize = p.starSize ?? 0.5;
+    const maxR = Math.max(width, height) * (0.3 + starSize * 0.9);
     const count = Math.floor(this.#stars.length * density);
 
     ctx.save();

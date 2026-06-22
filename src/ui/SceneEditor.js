@@ -235,7 +235,8 @@ export class SceneEditor extends EventEmitter {
 
   /** Build the timeline param buttons from the active target's descriptors. */
   #renderParamBar() {
-    const descs = this.#target()?.descriptors ?? [];
+    // Signal selectors are discrete (not keyframable) → no lane button.
+    const descs = (this.#target()?.descriptors ?? []).filter((d) => !d.signal);
     if (descs.length && !descs.find((d) => d.key === this.#activeParam)) {
       this.#activeParam = descs[0].key;
     }
@@ -363,6 +364,11 @@ export class SceneEditor extends EventEmitter {
     base.params = base.params ?? {};
     const fields = this.#baseParams.map((d) => {
       const v = base.params[d.key] ?? d.default;
+      if (d.signal) {
+        const opts = (d.options ?? []).map((s) =>
+          `<option value="${s}"${s === v ? ' selected' : ''}>${s}</option>`).join('');
+        return `<label class="av-editor-label">${d.label}</label><select data-bk="${d.key}">${opts}</select>`;
+      }
       if (d.color) {
         return `<label class="av-editor-label">${d.label}</label><input type="color" data-bk="${d.key}" value="${v}">`;
       }
@@ -374,12 +380,13 @@ export class SceneEditor extends EventEmitter {
       `<div class="av-editor-hint">Base layer. Sliders set the value used when a parameter has no keyframes.</div>`;
     for (const d of this.#baseParams) {
       const input = this.#inspectorEl.querySelector(`[data-bk="${d.key}"]`);
-      input.addEventListener(d.color ? 'change' : 'input', (e) => {
-        const val = d.color ? e.target.value : +e.target.value;
+      const evt = (d.color || d.signal) ? 'change' : 'input';
+      input.addEventListener(evt, (e) => {
+        const val = (d.color || d.signal) ? e.target.value : +e.target.value;
         base.params[d.key] = val;
         this.emit('updateBase', { params: { [d.key]: val } });
-        if (!d.color) { const b = input.previousElementSibling?.querySelector('b'); if (b) b.textContent = val.toFixed(2); }
-        if (!this.#kfs(false)?.length) this.#renderLane();
+        if (!d.color && !d.signal) { const b = input.previousElementSibling?.querySelector('b'); if (b) b.textContent = val.toFixed(2); }
+        if (!d.signal && !this.#kfs(false)?.length) this.#renderLane();
       });
     }
   }
