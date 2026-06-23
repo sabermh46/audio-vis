@@ -1,6 +1,7 @@
 import { EventEmitter } from '../core/EventEmitter.js';
 import { clamp } from '../utils/format.js';
 import { normalizeKeyframes } from '../components/SceneMigrate.js';
+import { DEFAULT_CLEANUP } from '../core/SignalConditioner.js';
 
 const MAX_BEAT_TICKS = 400;
 const PAD = 6;                 // vertical padding so dots aren't clipped
@@ -14,6 +15,7 @@ const COMPONENT_PARAMS = [
   { key: 'size', label: 'Size', min: 0.05, max: 0.6, color: false, fallback: 'size', default: 0.25 },
   { key: 'opacity', label: 'Opacity', min: 0, max: 1, color: false, fallback: 'opacity', default: 1 },
   { key: 'color', label: 'Color', min: 0, max: 1, color: true, fallback: 'color', default: '#ffffff' },
+  { key: 'gate', label: 'Gate', min: 0, max: 1, color: false, fallback: 'gate', default: 0 },
 ];
 const BASE_ID = '__base__';
 
@@ -46,6 +48,8 @@ export class SceneEditor extends EventEmitter {
 
   #open = false;
   #scene = { base: null, components: [] };
+  #cleanup = { ...DEFAULT_CLEANUP };
+  #cleanupEl = null;
   #selectedId = null;
   #baseParams = [];      // base visualizer's keyframable descriptors (from App)
   #activeParam = 'intensity';
@@ -71,6 +75,27 @@ export class SceneEditor extends EventEmitter {
         <div class="av-editor-section">
           <label class="av-editor-label">Base visualizer</label>
           <select class="av-editor-base"></select>
+        </div>
+        <div class="av-editor-section av-editor-cleanup">
+          <label class="av-editor-label av-clean-head">
+            <input type="checkbox" class="av-clean-enabled"> Signal cleanup
+          </label>
+          <div class="av-clean-body">
+            <label class="av-editor-label">Mode</label>
+            <select class="av-clean-mode">
+              <option value="adaptive">Adaptive (auto floor)</option>
+              <option value="fixed">Fixed floor</option>
+            </select>
+            <div class="av-clean-adaptive">
+              <label class="av-editor-label">Strength <b class="av-clean-strength-val">0%</b></label>
+              <input type="range" class="av-clean-strength" min="0" max="1" step="0.01" value="0">
+            </div>
+            <div class="av-clean-fixed">
+              <label class="av-editor-label">Fixed floor <b class="av-clean-fixed-val">10%</b></label>
+              <input type="range" class="av-clean-fixed-input" min="0" max="0.9" step="0.01" value="0.1">
+            </div>
+            <div class="av-editor-hint">Subtracts each signal's noise floor so bleed/hum stops driving visuals.</div>
+          </div>
         </div>
         <div class="av-editor-section">
           <label class="av-editor-label">Add element</label>
@@ -127,6 +152,12 @@ export class SceneEditor extends EventEmitter {
       const v = this.#baseSelect.value;
       this.emit('setBase', v === '__none__' ? null : v);
     });
+    this.#cleanupEl = this.#el.querySelector('.av-editor-cleanup');
+    const cleanInput = (sel, evt, fn) => listen(this.#cleanupEl.querySelector(sel), evt, fn);
+    cleanInput('.av-clean-enabled', 'change', (e) => this.#patchCleanup({ enabled: e.target.checked }));
+    cleanInput('.av-clean-mode', 'change', (e) => this.#patchCleanup({ mode: e.target.value }));
+    cleanInput('.av-clean-strength', 'input', (e) => this.#patchCleanup({ strength: +e.target.value }));
+    cleanInput('.av-clean-fixed-input', 'input', (e) => this.#patchCleanup({ fixedFloor: +e.target.value }));
     listen(this.#paramBarEl, 'click', (e) => {
       const btn = e.target.closest('.av-tl-param');
       if (!btn) return;
@@ -162,6 +193,34 @@ export class SceneEditor extends EventEmitter {
 
   setEnabled(enabled) { this.#el.classList.toggle('av-editor-disabled', !enabled); }
 
+  /** Populate the signal-cleanup controls (App pushes the active config). */
+  setCleanup(config) {
+    this.#cleanup = { ...DEFAULT_CLEANUP, ...(config ?? {}) };
+    this.#renderCleanup();
+  }
+
+  /** Mutate cleanup config locally, sync the UI, and emit for App/conditioner. */
+  #patchCleanup(patch) {
+    this.#cleanup = { ...this.#cleanup, ...patch };
+    if (this.#scene) this.#scene.signalCleanup = { ...this.#cleanup };
+    this.#renderCleanup();
+    this.emit('updateCleanup', { ...this.#cleanup });
+  }
+
+  #renderCleanup() {
+    if (!this.#cleanupEl) return;
+    const c = this.#cleanup;
+    this.#cleanupEl.querySelector('.av-clean-enabled').checked = !!c.enabled;
+    this.#cleanupEl.querySelector('.av-clean-mode').value = c.mode;
+    this.#cleanupEl.querySelector('.av-clean-strength').value = c.strength;
+    this.#cleanupEl.querySelector('.av-clean-strength-val').textContent = `${Math.round(c.strength * 100)}%`;
+    this.#cleanupEl.querySelector('.av-clean-fixed-input').value = c.fixedFloor;
+    this.#cleanupEl.querySelector('.av-clean-fixed-val').textContent = `${Math.round(c.fixedFloor * 100)}%`;
+    this.#cleanupEl.querySelector('.av-clean-body').style.display = c.enabled ? '' : 'none';
+    this.#cleanupEl.querySelector('.av-clean-adaptive').style.display = c.mode === 'fixed' ? 'none' : '';
+    this.#cleanupEl.querySelector('.av-clean-fixed').style.display = c.mode === 'fixed' ? '' : 'none';
+  }
+
   setTrack({ trackId, duration, beats, canSave, hasSaved }) {
     this.#duration = duration || 0;
     this.#beats = beats || new Float64Array(0);
@@ -179,6 +238,8 @@ export class SceneEditor extends EventEmitter {
 
   setScene(scene) {
     this.#scene = scene ?? { base: { id: null, params: {}, automation: {} }, components: [] };
+    this.#cleanup = { ...DEFAULT_CLEANUP, ...(this.#scene.signalCleanup ?? {}) };
+    this.#renderCleanup();
     const keepBase = this.#selectedId === BASE_ID && this.#baseParams.length;
     if (!keepBase && !this.#scene.components.find((c) => c.id === this.#selectedId)) {
       this.#selectedId = this.#scene.components[0]?.id ?? null;
@@ -339,19 +400,22 @@ export class SceneEditor extends EventEmitter {
       <input type="range" data-f="size" min="0.05" max="0.6" step="0.01" value="${p.size}">
       <label class="av-editor-label">Opacity</label>
       <input type="range" data-f="opacity" min="0" max="1" step="0.01" value="${p.opacity ?? 1}">
+      <label class="av-editor-label">Gate <b>${Math.round((p.gate ?? 0) * 100)}%</b></label>
+      <input type="range" data-f="gate" min="0" max="1" step="0.01" value="${p.gate ?? 0}">
       <label class="av-editor-label">Color</label>
       <input type="color" data-f="color" value="${p.color}">
-      <div class="av-editor-hint">Sliders set the value used when a parameter has no keyframes.</div>`;
+      <div class="av-editor-hint">Sliders set the value used when a parameter has no keyframes. Gate lifts this element's signal noise floor.</div>`;
 
     this.#inspectorEl.querySelector('[data-f="signal"]').addEventListener('change', (e) =>
       this.#patch({ bind: { signal: e.target.value } }));
-    for (const f of ['baseIntensity', 'sensitivity', 'size', 'opacity', 'color']) {
+    for (const f of ['baseIntensity', 'sensitivity', 'size', 'opacity', 'gate', 'color']) {
       const input = this.#inspectorEl.querySelector(`[data-f="${f}"]`);
       const evt = f === 'color' ? 'change' : 'input';
       input.addEventListener(evt, (e) => {
         const v = f === 'color' ? e.target.value : +e.target.value;
         this.#patch({ params: { ...this.#selected().params, [f]: v } });
         if (f === 'baseIntensity') this.#renderInspector();
+        if (f === 'gate') { const b = input.previousElementSibling?.querySelector('b'); if (b) b.textContent = `${Math.round(v * 100)}%`; }
         // The empty-state curve tracks the static fallback — redraw it.
         if (!this.#kfs(false)?.length) this.#renderLane();
       });

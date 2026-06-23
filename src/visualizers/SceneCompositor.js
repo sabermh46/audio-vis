@@ -124,7 +124,7 @@ export class SceneCompositor extends Visualizer {
       const comp = s.comp;
       const p = comp.params ?? {};
 
-      let intensity, sensitivity, size, opacity, color;
+      let intensity, sensitivity, size, opacity, color, gate;
       if (usingTables) {
         const tb = this.#compiled.get(comp.id);
         intensity = tb.intensity ? tb.intensity[idx] : tb.static.intensity;
@@ -132,6 +132,7 @@ export class SceneCompositor extends Visualizer {
         size = tb.size ? tb.size[idx] : tb.static.size;
         opacity = tb.opacity ? tb.opacity[idx] : tb.static.opacity;
         color = tb.color ? tb.color[idx] : tb.static.color;
+        gate = tb.gate ? tb.gate[idx] : tb.static.gate;
       } else {
         const a = comp.automation;
         intensity = paramAt(a, 'intensity', t, p.baseIntensity ?? 0.3);
@@ -139,10 +140,13 @@ export class SceneCompositor extends Visualizer {
         size = paramAt(a, 'size', t, p.size ?? 0.25);
         opacity = paramAt(a, 'opacity', t, p.opacity ?? 1);
         color = paramAt(a, 'color', t, p.color ?? '#ffffff');
+        gate = paramAt(a, 'gate', t, p.gate ?? 0);
       }
 
       const raw = resolveSignal(comp.bind?.signal, frame);
-      const signal = clamp(raw * sensitivity * intensity, 0, 1);
+      // Per-element downward-expansion gate: lift the noise floor for this element.
+      const gated = gate > 0 ? clamp((raw - gate) / (1 - gate), 0, 1) : raw;
+      const signal = clamp(gated * sensitivity * intensity, 0, 1);
 
       const L = s.layout;
       L.x = (p.x ?? 0.5) * width;
@@ -196,6 +200,11 @@ export class SceneCompositor extends Visualizer {
     this.#refreshBaseDescriptors();
     this.#scene.base = { id: id ?? baseVisualizer?.constructor?.meta?.id ?? null, params: {}, automation: {} };
     this.#compiled = null;
+  }
+
+  /** Store the signal-cleanup config on the scene so getScene() persists it. */
+  setSignalCleanup(config) {
+    this.#scene.signalCleanup = { ...config };
   }
 
   /** Merge keyframable base-layer params/automation (used by the editor). */

@@ -134,6 +134,7 @@ const COMPONENT_DESCRIPTORS = [
   { key: 'size', color: false, fallback: 'size', default: 0.25 },
   { key: 'opacity', color: false, fallback: 'opacity', default: 1 },
   { key: 'color', color: true, fallback: 'color', default: '#ffffff' },
+  { key: 'gate', color: false, fallback: 'gate', default: 0 },
 ];
 
 /**
@@ -151,6 +152,6 @@ export function compileComponent(component, fps, frameCount, fallbacks) {
   );
   return {
     intensity: tables.intensity, sensitivity: tables.sensitivity, size: tables.size,
-    opacity: tables.opacity, color: tables.color, static: stat,
+    opacity: tables.opacity, color: tables.color, gate: tables.gate, static: stat,
   };
 }

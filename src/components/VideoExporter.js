@@ -1,5 +1,6 @@
 import { EventEmitter } from '../core/EventEmitter.js';
 import { PrecomputedAnalysisSource } from '../core/PrecomputedAnalysisSource.js';
+import { SignalConditioner } from '../core/SignalConditioner.js';
 
 const EXPORT_W = 2560;
 const EXPORT_H = 1440;
@@ -26,16 +27,18 @@ export class VideoExporter extends EventEmitter {
   #host;
   #compositor;
   #analysis;
+  #cleanupConfig;
   #getDuration;
   #getAudioBuffer;
   #filename;
   #aborted = false;
 
-  constructor({ host, compositor = null, analysis, getDuration, getAudioBuffer = null, filename }) {
+  constructor({ host, compositor = null, analysis, cleanupConfig = null, getDuration, getAudioBuffer = null, filename }) {
     super();
     this.#host = host;
     this.#compositor = compositor;
     this.#analysis = analysis;
+    this.#cleanupConfig = cleanupConfig;
     this.#getDuration = getDuration;
     this.#getAudioBuffer = getAudioBuffer;
     this.#filename = filename;
@@ -184,10 +187,18 @@ export class VideoExporter extends EventEmitter {
     }
 
     // ── Fake-clock analysis source ────────────────────────────────────────────
+    // Rebuild the conditioner from the same analysis so exported motion matches
+    // the live preview's signal cleanup.
+    let conditioner = null;
+    if (this.#cleanupConfig) {
+      conditioner = new SignalConditioner(this.#analysis);
+      conditioner.setConfig(this.#cleanupConfig);
+    }
     let exportTime = 0;
     const analysisSource = new PrecomputedAnalysisSource(this.#analysis, {
       getTime: () => exportTime,
       analyser: null,
+      conditioner,
     });
     this.#compositor?.setTimeOverride(() => exportTime);
 

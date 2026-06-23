@@ -83,9 +83,11 @@ def get_scenes(tid: str) -> dict | None:
     _ensure()
     if _backend == "mysql":
         try:
-            with _lock, _conn.cursor() as cur:
-                cur.execute("SELECT data FROM scenes WHERE track_id=%s", (tid,))
-                row = cur.fetchone()
+            with _lock:
+                _conn.ping(reconnect=True)  # revive a stale/idle connection
+                with _conn.cursor() as cur:
+                    cur.execute("SELECT data FROM scenes WHERE track_id=%s", (tid,))
+                    row = cur.fetchone()
             return json.loads(row["data"]) if row else None
         except Exception:
             logger.exception("MySQL get_scenes failed; falling back to file")
@@ -96,12 +98,14 @@ def set_scenes(tid: str, envelope: dict) -> dict:
     _ensure()
     if _backend == "mysql":
         try:
-            with _lock, _conn.cursor() as cur:
-                cur.execute(
-                    "INSERT INTO scenes (track_id, data) VALUES (%s, %s) "
-                    "ON DUPLICATE KEY UPDATE data=VALUES(data)",
-                    (tid, json.dumps(envelope)),
-                )
+            with _lock:
+                _conn.ping(reconnect=True)  # revive a stale/idle connection
+                with _conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO scenes (track_id, data) VALUES (%s, %s) "
+                        "ON DUPLICATE KEY UPDATE data=VALUES(data)",
+                        (tid, json.dumps(envelope)),
+                    )
             return envelope
         except Exception:
             logger.exception("MySQL set_scenes failed; falling back to file")

@@ -12,10 +12,28 @@
 export function migrateScene(scene) {
   if (!scene) return scene;
   scene.base = migrateBase(scene.base);
+  scene.signalCleanup = migrateCleanup(scene.signalCleanup);
   for (const c of scene.components ?? []) {
     c.automation = migrateAutomation(c.automation, c.params?.baseIntensity ?? 0.3);
   }
   return scene;
+}
+
+/**
+ * Normalises `scene.signalCleanup` to the full config shape. Idempotent;
+ * absent → the no-op default (strength 0), so legacy scenes are unchanged.
+ */
+export function migrateCleanup(cleanup) {
+  const base = { enabled: true, strength: 0, mode: 'adaptive', fixedFloor: 0.1 };
+  if (cleanup && typeof cleanup === 'object' && !Array.isArray(cleanup)) {
+    return {
+      enabled: cleanup.enabled !== false,
+      strength: Number.isFinite(cleanup.strength) ? cleanup.strength : 0,
+      mode: cleanup.mode === 'fixed' ? 'fixed' : 'adaptive',
+      fixedFloor: Number.isFinite(cleanup.fixedFloor) ? cleanup.fixedFloor : 0.1,
+    };
+  }
+  return base;
 }
 
 /**

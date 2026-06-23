@@ -19,6 +19,7 @@ export class PrecomputedAnalysisSource {
   #analysis;
   #getTime;
   #analyser;
+  #conditioner;
   #beatCursor = 0;
   #lastTime = 0;
 
@@ -38,12 +39,13 @@ export class PrecomputedAnalysisSource {
 
   /**
    * @param {object} analysis - decoded AnalysisClient.analyze() result
-   * @param {{getTime: () => number, analyser?: AnalyserNode}} opts
+   * @param {{getTime: () => number, analyser?: AnalyserNode, conditioner?: object}} opts
    */
-  constructor(analysis, { getTime, analyser = null }) {
+  constructor(analysis, { getTime, analyser = null, conditioner = null }) {
     this.#analysis = analysis;
     this.#getTime = getTime;
     this.#analyser = analyser;
+    this.#conditioner = conditioner;
     this.frame.bars = new Float32Array(analysis.numBars);
     this.frame.waveform = new Uint8Array(analyser ? analyser.fftSize : 2048);
     if (!analyser) this.frame.waveform.fill(128); // silence midline
@@ -51,6 +53,11 @@ export class PrecomputedAnalysisSource {
   }
 
   get numBars() { return this.#analysis.numBars; }
+
+  /** Downward-expand a scalar channel through the conditioner (no-op if absent). */
+  #cond(channel, value) {
+    return this.#conditioner ? this.#conditioner.apply(channel, value) : value;
+  }
 
   /** Lerp a 1-D uint8 track at fractional frame f. */
   #track(data, i, frac) {
@@ -75,26 +82,29 @@ export class PrecomputedAnalysisSource {
       out[k] = (bars[rowA + k] + (bars[rowB + k] - bars[rowA + k]) * frac) / 255;
     }
 
+    const cond = this.#conditioner;
     for (const name of ['bass', 'mid', 'treble']) {
-      const raw = this.#track(bands[name], i, frac);
+      let raw = this.#track(bands[name], i, frac);
+      if (cond) raw = cond.apply(`band.${name}`, raw);
       this.frame.bandsRaw[name] = raw;
       const current = this.frame.bands[name];
       const rate = raw > current ? BAND_ATTACK : BAND_RELEASE;
       this.frame.bands[name] = current + (raw - current) * rate;
     }
 
-    this.frame.onset = this.#track(this.#analysis.onset, i, frac);
-    this.frame.harmonic = this.#track(this.#analysis.harmonic, i, frac);
-    this.frame.percussive = this.#track(this.#analysis.percussive, i, frac);
-    this.frame.volume = this.#track(this.#analysis.rms, i, frac);
+    this.frame.onset = this.#cond('onset', this.#track(this.#analysis.onset, i, frac));
+    this.frame.harmonic = this.#cond('harmonic', this.#track(this.#analysis.harmonic, i, frac));
+    this.frame.percussive = this.#cond('percussive', this.#track(this.#analysis.percussive, i, frac));
+    this.frame.volume = this.#cond('volume', this.#track(this.#analysis.rms, i, frac));
 
     // Real ML stem energies when present; otherwise the best DSP proxies.
     const stemTracks = this.#analysis.stems;
     for (const name of ['vocals', 'drums', 'bass', 'other']) {
       let raw;
       if (stemTracks) {
-        raw = this.#track(stemTracks[name], i, frac);
+        raw = this.#cond(`stem.${name}`, this.#track(stemTracks[name], i, frac));
       } else {
+        // DSP proxies are already conditioned upstream (harmonic/percussive/bands).
         raw = name === 'vocals' ? this.frame.harmonic
           : name === 'drums' ? this.frame.percussive
           : name === 'bass' ? this.frame.bandsRaw.bass

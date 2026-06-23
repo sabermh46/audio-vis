@@ -536,6 +536,9 @@ button {
 .av-editor-close:hover { background: var(--surface-2); color: var(--text); }
 .av-editor-section { display: flex; flex-direction: column; gap: 6px; }
 .av-editor-label { font-size: 11px; color: var(--text-dim); }
+.av-clean-head { display: flex; align-items: center; gap: 6px; color: var(--text); }
+.av-clean-head input[type="checkbox"] { width: auto; }
+.av-clean-body { display: flex; flex-direction: column; gap: 6px; }
 .av-editor select,
 .av-editor input[type="range"],
 .av-editor input[type="color"] { width: 100%; }

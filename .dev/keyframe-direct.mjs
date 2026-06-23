@@ -85,6 +85,17 @@ check('compiled clamps before-first/after-last',
 const cmidIdx = Math.round(1 * FPS);
 check('compiled color parity (midpoint ≈ #808080)', Math.abs(hexToRgb(tbl.color[cmidIdx]).r - 128) <= 1, tbl.color[cmidIdx]);
 
+// --- per-element gate descriptor (new animatable param) ---
+const gComp = {
+  params: { baseIntensity: 0.3, gate: 0.2 },
+  automation: { gate: [{ t: 0, v: 0 }, { t: 2, v: 0.8 }] },
+};
+const gTbl = compileComponent(gComp, FPS, frameCount);
+check('compiled gate is a typed array', gTbl.gate instanceof Float32Array && gTbl.gate.length === frameCount);
+check('compiled gate parity with paramAt', approx(gTbl.gate[Math.round(1 * FPS)], paramAt(gComp.automation, 'gate', 1, 0.2)));
+const gStatic = compileComponent({ params: { gate: 0.35 }, automation: {} }, FPS, frameCount);
+check('gate without keyframes → null + static fallback', gStatic.gate === null && gStatic.static.gate === 0.35);
+
 // --- descriptor-driven compileParams (base-layer params) ---
 const baseDescriptors = [
   { key: 'starIntensity', min: 0, max: 1, default: 0.7 },

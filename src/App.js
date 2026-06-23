@@ -22,6 +22,7 @@ import { CloudGroup } from './components/CloudGroup.js';
 import { Starfield } from './components/Starfield.js';
 import { AnalysisClient } from './core/AnalysisClient.js';
 import { PrecomputedAnalysisSource } from './core/PrecomputedAnalysisSource.js';
+import { SignalConditioner } from './core/SignalConditioner.js';
 import { DropZone } from './ui/DropZone.js';
 import { TransportControls } from './ui/TransportControls.js';
 import { TemplateGallery } from './ui/TemplateGallery.js';
@@ -185,6 +186,10 @@ export class App {
     }));
     sub(this.#editor.on('updateComponent', ({ id, patch }) => this.compositor?.updateComponent(id, patch)));
     sub(this.#editor.on('updateBase', (patch) => this.compositor?.updateBase(patch)));
+    sub(this.#editor.on('updateCleanup', (cfg) => {
+      this.conditioner?.setConfig(cfg);     // live preview
+      this.compositor?.setSignalCleanup(cfg); // persist on save
+    }));
     sub(this.#editor.on('setBase', (id) => {
       this.#ensureCompositor();
       this.compositor.setBaseVisualizer(id ? this.registry.create(id) : null, id); // resets base params/automation
@@ -276,9 +281,11 @@ export class App {
         });
         if (seq !== this.#loadSeq) return; // superseded by a newer file drop
         this.lastAnalysis = analysis; // exposed for tests/debugging
+        this.conditioner = new SignalConditioner(analysis);
         this.precomputedSource = new PrecomputedAnalysisSource(analysis, {
           getTime: () => this.audioEngine.currentTime,
           analyser: this.audioEngine.analyser,
+          conditioner: this.conditioner,
         });
         this.host.setSource(this.precomputedSource);
         usePrecomputed = true;
@@ -326,9 +333,11 @@ export class App {
     if (seq !== this.#loadSeq) return;
 
     this.lastAnalysis = analysis;
+    this.conditioner = new SignalConditioner(analysis);
     this.precomputedSource = new PrecomputedAnalysisSource(analysis, {
       getTime: () => this.audioEngine.currentTime,
       analyser: this.audioEngine.analyser,
+      conditioner: this.conditioner,
     });
     this.host.setSource(this.precomputedSource);
     this.mode = 'precomputed';
@@ -409,6 +418,11 @@ export class App {
     } else {
       this.#clearCompositor();
     }
+    // Apply this scene's signal-cleanup config to the live conditioner (the
+    // compositor migrates/defaults it; no scene → no-op default).
+    const cleanup = this.compositor?.getScene().signalCleanup;
+    this.conditioner?.setConfig(cleanup ?? undefined);
+    this.#editor.setCleanup(cleanup);
     this.#syncExportBtn();
     if (this.#editorOpen) {
       this.#pushBaseParams();
@@ -531,6 +545,7 @@ export class App {
       host: this.host,
       compositor: this.compositor ?? null,
       analysis: this.lastAnalysis,
+      cleanupConfig: this.conditioner?.config ?? null,
       getDuration: () => this.audioEngine.duration,
       getAudioBuffer: () => this.audioEngine.decodeAudioBuffer(),
       filename: this.#exportFilename(),
