@@ -32,6 +32,7 @@ export class SceneCompositor extends Visualizer {
 
   #registry;
   #getTime;
+  #getTimeBase;   // original callback — restored after export
   #getDuration;
   #base = null;
   #scene;
@@ -50,7 +51,8 @@ export class SceneCompositor extends Visualizer {
     super();
     this.#base = baseVisualizer;
     this.#scene = migrateScene(scene ?? { base: { id: null, params: {}, automation: {} }, canvas: { bg: '#05060c' }, components: [] });
-    this.#getTime = getTime ?? (() => 0);
+    this.#getTimeBase = getTime ?? (() => 0);
+    this.#getTime = this.#getTimeBase;
     this.#getDuration = getDuration ?? (() => 0);
     this.#registry = componentRegistry;
     this.#refreshBaseDescriptors();
@@ -65,6 +67,10 @@ export class SceneCompositor extends Visualizer {
     if (this.#mode === 'play') this.#compiled = null; // recompile lazily on next frame
     return this.#mode;
   }
+
+  /** Override the time source used for keyframe lookup during video export. */
+  setTimeOverride(fn) { this.#getTime = fn; }
+  clearTimeOverride() { this.#getTime = this.#getTimeBase; }
 
   getMode() { return this.#mode; }
 

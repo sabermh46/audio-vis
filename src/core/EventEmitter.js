@@ -16,10 +16,10 @@ export class EventEmitter {
     this.#listeners.get(event)?.delete(handler);
   }
 
-  emit(event, payload) {
+  emit(event, ...args) {
     const handlers = this.#listeners.get(event);
     if (!handlers) return;
-    for (const handler of [...handlers]) handler(payload);
+    for (const handler of [...handlers]) handler(...args);
   }
 
   removeAllListeners() {

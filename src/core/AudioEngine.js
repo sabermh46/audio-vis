@@ -116,6 +116,13 @@ export class AudioEngine extends EventEmitter {
   get trackName() { return this.#trackName; }
   get analyser() { return this.#analyser; }
 
+  async decodeAudioBuffer() {
+    if (!this.#hasSrc || !this.#audio.src) return null;
+    const response = await fetch(this.#audio.src, { credentials: 'omit' });
+    const arrayBuffer = await response.arrayBuffer();
+    return this.#context.decodeAudioData(arrayBuffer);
+  }
+
   destroy() {
     this.pause();
     for (const [event, handler] of this.#mediaListeners) {

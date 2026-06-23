@@ -29,7 +29,9 @@
       "Bash(.venv/Scripts/python -c \"import app; print\\('app imports OK'\\)\")",
       "Bash(node .dev/library-endpoint.mjs)",
       "Bash(node .dev/scenes-endpoint.mjs)",
-      "Bash(node .dev/keyframe-direct.mjs)"
+      "Bash(node .dev/keyframe-direct.mjs)",
+      "Bash(node --input-type=module --check)",
+      "PowerShell(Select-String -Path \"e:\\\\Client\\\\audio-vis\\\\src\\\\lib\\\\mp4-muxer.mjs\" -Pattern \"^export \" | Select-Object -First 5 | ForEach-Object { $_.Line })"
     ]
   }
 }

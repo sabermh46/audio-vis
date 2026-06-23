@@ -28,6 +28,8 @@ import { TemplateGallery } from './ui/TemplateGallery.js';
 import { StatusIndicator } from './ui/StatusIndicator.js';
 import { StartupModal } from './ui/StartupModal.js';
 import { SceneEditor } from './ui/SceneEditor.js';
+import { VideoExporter } from './components/VideoExporter.js';
+import { ExportOverlay } from './ui/ExportOverlay.js';
 
 
 const STORAGE_KEY = 'audio-vis:visualizer';
@@ -56,6 +58,8 @@ export class App {
   #status = null;
   #modal = null;
   #editor = null;
+  #exportOverlay = null;
+  #activeExporter = null;
   #editorOpen = false;
   #hasSavedScene = false;
   #root = null;
@@ -121,6 +125,8 @@ export class App {
     this.#modal.attach(this.#root);
     this.#editor = new SceneEditor();
     this.#editor.attach(stage);
+    this.#exportOverlay = new ExportOverlay();
+    this.#exportOverlay.attach(stage, () => this.#cancelExport());
     this.#editor.setComponentList(this.componentRegistry.list());
     this.#editor.setBaseOptions(this.registry.list().map((m) => ({ id: m.id, name: m.name })));
     this.#editor.setEnabled(false);
@@ -193,6 +199,7 @@ export class App {
     sub(this.#transport.on('playToggle', () => this.audioEngine.toggle()));
     sub(this.#transport.on('seek', (seconds) => this.audioEngine.seek(seconds)));
     sub(this.#transport.on('volume', (value) => this.audioEngine.setVolume(value)));
+    sub(this.#transport.on('export', () => this.#startExport()));
     sub(this.#transport.on('toggleFullscreen', () => this.host.toggleFullscreen()));
     sub(this.#transport.on('toggleGallery', () => {
       this.#transport.setGalleryOpen(this.#gallery.toggle());
@@ -208,6 +215,7 @@ export class App {
       this.#idleEl.classList.add('hidden');
       this.#dropZone.setClickThrough(true);
       this.#editor.setEnabled(true);
+      this.#syncExportBtn(); // mode is already set by the time trackloaded fires
       this.host.start();
       this.#applySceneForTrack();
       this.audioEngine.play().catch(() => {/* user can press play manually */});
@@ -401,6 +409,7 @@ export class App {
     } else {
       this.#clearCompositor();
     }
+    this.#syncExportBtn();
     if (this.#editorOpen) {
       this.#pushBaseParams();
       this.#editor.setScene(this.compositor?.getScene() ?? this.#blankScene());
@@ -444,12 +453,19 @@ export class App {
     if (!this.compositor) return;
     this.compositor = null;
     this.host.setVisualizer(this.registry.create(this.#restoreVisualizerId()));
+    this.#syncExportBtn();
+  }
+
+  #syncExportBtn() {
+    const canExport = this.mode === 'precomputed' && !this.#editorOpen;
+    this.#transport.setExportEnabled(canExport);
   }
 
   #toggleEditor(force) {
     if (!this.audioEngine.hasTrack) return;
     this.#editorOpen = this.#editor.toggle(force);
     this.#transport.setEditorOpen(this.#editorOpen);
+    this.#syncExportBtn();
     if (this.#editorOpen) {
       this.#ensureCompositor();
       this.compositor.setMode('edit'); // live keyframe eval while authoring
@@ -502,6 +518,88 @@ export class App {
     }
   }
 
+  async #startExport() {
+    if (this.mode !== 'precomputed' || this.#editorOpen || !this.lastAnalysis) return;
+    if (this.#activeExporter) { this.#cancelExport(); return; }
+
+    this.compositor?.setMode('play'); // ensure precomputed tables are compiled (if a scene is active)
+    this.host.stop();                 // freeze live render — exporter drives the host independently
+
+    this.audioEngine.pause(); // stop playback while export runs (faster + no audio leakage)
+
+    const exporter = new VideoExporter({
+      host: this.host,
+      compositor: this.compositor ?? null,
+      analysis: this.lastAnalysis,
+      getDuration: () => this.audioEngine.duration,
+      getAudioBuffer: () => this.audioEngine.decodeAudioBuffer(),
+      filename: this.#exportFilename(),
+    });
+    this.#activeExporter = exporter;
+    this.#exportOverlay.show();
+    this.#transport.setExporting(true);
+
+    exporter.on('status', (text) => this.#exportOverlay.setStatus(text));
+    exporter.on('progress', (frac, fi, total) => this.#exportOverlay.setProgress(frac, fi, total));
+    exporter.on('error', (msg) => {
+      console.error('[export]', msg);
+      this.#activeExporter = null;
+      this.#transport.setExporting(false);
+      this.host.start(); // resume live render even on error
+      this.#exportOverlay.setStatus(`Error: ${msg}`);
+      setTimeout(() => this.#exportOverlay.hide(), 4000);
+    });
+    exporter.on('done', (blob) => this.#finishExport(blob));
+    exporter.on('aborted', () => this.#finishExport(null));
+
+    await exporter.start();
+  }
+
+  #finishExport(blob) {
+    this.#activeExporter = null;
+    this.#exportOverlay.hide();
+    this.#transport.setExporting(false);
+    this.host.start(); // resume live render
+    if (blob) this.#downloadBlob(blob, this.#exportFilename());
+  }
+
+  #cancelExport() {
+    this.#activeExporter?.abort();
+  }
+
+  #exportFilename() {
+    const base = this.audioEngine.trackName.replace(/\.[^.]+$/, '').replace(/[^a-z0-9_\-. ]/gi, '_');
+    return `${base || 'export'}-1440p.mp4`;
+  }
+
+  async #downloadBlob(blob, filename) {
+    // Try the native Save-As picker first (Chrome/Edge).
+    if (typeof showSaveFilePicker === 'function') {
+      try {
+        const handle = await showSaveFilePicker({
+          suggestedName: filename,
+          types: [{ description: 'MP4 video', accept: { 'video/mp4': ['.mp4'] } }],
+        });
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        return;
+      } catch (e) {
+        if (e.name === 'AbortError') return; // user cancelled picker
+        // fall through to <a> download on any other error
+      }
+    }
+    // Fallback: silent download to the browser's default downloads folder.
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  }
+
   #restoreVisualizerId() {
     try { return localStorage.getItem(STORAGE_KEY) ?? DEFAULT_VISUALIZER; }
     catch { return DEFAULT_VISUALIZER; }
@@ -509,6 +607,7 @@ export class App {
 
   destroy() {
     this.#analysisAbort?.abort();
+    this.#activeExporter?.abort();
     for (const unsubscribe of this.#unsubscribers) unsubscribe();
     this.#unsubscribers = [];
     this.host.destroy();
@@ -519,6 +618,7 @@ export class App {
     this.#modal.destroy();
     this.#editor.destroy();
     this.audioEngine.destroy();
+    this.#exportOverlay.destroy();
     this.#root?.remove();
   }
 }

@@ -95,6 +95,14 @@ export class VisualizerHost extends EventEmitter {
     this.#visualizer?.onResize(this.#width, this.#height);
   }
 
+  /**
+   * Render the active visualizer into an external context at a given size.
+   * Used by VideoExporter to render 1440p frames without changing host state.
+   */
+  renderTo(ctx, frame, dt, width, height) {
+    this.#visualizer?.render(ctx, frame, dt, { width, height });
+  }
+
   #clear() {
     this.#ctx.clearRect(0, 0, this.#width, this.#height);
   }

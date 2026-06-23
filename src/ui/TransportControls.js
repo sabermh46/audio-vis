@@ -36,6 +36,7 @@ export class TransportControls extends EventEmitter {
       </div>
       <button class="av-btn-icon" data-action="editor" title="Scene editor">✏️</button>
       <button class="av-btn-icon" data-action="gallery" title="Visualizer templates">🎨</button>
+      <button class="av-btn-icon" data-action="export" title="Export 1440p video" disabled>🎬</button>
       <button class="av-btn-icon" data-action="fullscreen" title="Fullscreen">⛶</button>
     `;
     container.appendChild(this.#el);
@@ -57,6 +58,7 @@ export class TransportControls extends EventEmitter {
     listen(this.#playBtn, 'click', () => this.emit('playToggle'));
     listen(this.#galleryBtn, 'click', () => this.emit('toggleGallery'));
     listen(this.#el.querySelector('[data-action="editor"]'), 'click', () => this.emit('toggleEditor'));
+    listen(this.#el.querySelector('[data-action="export"]'), 'click', () => this.emit('export'));
     listen(this.#el.querySelector('[data-action="fullscreen"]'), 'click', () => this.emit('toggleFullscreen'));
 
     // While dragging, programmatic setTime() is suppressed so the thumb
@@ -109,6 +111,19 @@ export class TransportControls extends EventEmitter {
 
   setPlaying(isPlaying) {
     this.#playBtn.textContent = isPlaying ? '⏸' : '▶';
+  }
+
+  setExportEnabled(enabled) {
+    const btn = this.#el?.querySelector('[data-action="export"]');
+    if (btn) btn.disabled = !enabled;
+  }
+
+  setExporting(active) {
+    const btn = this.#el?.querySelector('[data-action="export"]');
+    if (btn) {
+      btn.textContent = active ? '⏹' : '🎬';
+      btn.title = active ? 'Stop export' : 'Export 1440p video';
+    }
   }
 
   setGalleryOpen(isOpen) {
